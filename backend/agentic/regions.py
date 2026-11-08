@@ -1,42 +1,31 @@
-from __future__ import annotations
+"""Zoomed crops of the invoice layout, so the model reads small print at higher resolution.
 
-from dataclasses import dataclass
+The geometry fits the common Sri Lankan supplier layout: supplier letterhead top-left, invoice
+number and purchaser top-right, the line-item table in the middle, totals at the bottom.
+"""
+
+from __future__ import annotations
 
 import cv2
 import numpy as np
 
-from .preprocess import ImagePreprocessError
-
-
-@dataclass(frozen=True)
-class RegionCrop:
-    name: str
-    png_bytes: bytes
-    mime: str = "image/png"
-
-
-# Geometry: fractions of (y0, y1, x0, x1) on the CLAHE image, then scale factor.
-_REGION_SPECS: tuple[tuple[str, float, float, float, float, float], ...] = (
+# (name, y0, y1, x0, x1, zoom) as fractions of the page height/width.
+REGION_SPECS: tuple[tuple[str, float, float, float, float, float], ...] = (
     ("supplier_panel", 0.0, 0.35, 0.0, 0.48, 2.5),
     ("header_right", 0.0, 0.35, 0.48, 1.0, 2.0),
     ("body", 0.32, 0.72, 0.0, 1.0, 1.5),
     ("footer", 0.68, 1.0, 0.0, 1.0, 1.5),
 )
 
+REGION_NAMES = tuple(spec[0] for spec in REGION_SPECS)
 
-def build_region_crops(clahe_png_bytes: bytes) -> list[RegionCrop]:
-    """Cut labeled header/body/footer bands from CLAHE PNG and upscale each."""
-    if not clahe_png_bytes:
-        raise ImagePreprocessError("empty image for region crops")
 
-    arr = np.frombuffer(clahe_png_bytes, dtype=np.uint8)
-    image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if image is None:
-        raise ImagePreprocessError("could not decode CLAHE image for region crops")
-
+def crop_regions(image: np.ndarray, *, max_side: int = 2048) -> list[tuple[str, np.ndarray]]:
+    """Cut and zoom each region. The zoom never pushes a crop past ``max_side`` pixels, and a
+    crop already larger than that is shrunk to it (the model would downscale it anyway)."""
     height, width = image.shape[:2]
-    crops: list[RegionCrop] = []
-    for name, y0f, y1f, x0f, x1f, scale in _REGION_SPECS:
+    crops: list[tuple[str, np.ndarray]] = []
+    for name, y0f, y1f, x0f, x1f, zoom in REGION_SPECS:
         y0 = max(0, min(height - 1, int(height * y0f)))
         y1 = max(y0 + 1, min(height, int(height * y1f)))
         x0 = max(0, min(width - 1, int(width * x0f)))
@@ -44,15 +33,12 @@ def build_region_crops(clahe_png_bytes: bytes) -> list[RegionCrop]:
         band = image[y0:y1, x0:x1]
         if band.size == 0:
             continue
-        zoomed = cv2.resize(
-            band,
-            None,
-            fx=scale,
-            fy=scale,
-            interpolation=cv2.INTER_CUBIC,
-        )
-        ok, encoded = cv2.imencode(".png", zoomed)
-        if not ok:
-            raise ImagePreprocessError(f"could not encode region crop {name}")
-        crops.append(RegionCrop(name=name, png_bytes=encoded.tobytes()))
+        band_h, band_w = band.shape[:2]
+        scale = min(zoom, max_side / max(band_h, band_w))
+        if abs(scale - 1.0) < 1e-6:
+            crops.append((name, band.copy()))
+            continue
+        size = (max(1, round(band_w * scale)), max(1, round(band_h * scale)))
+        interpolation = cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA
+        crops.append((name, cv2.resize(band, size, interpolation=interpolation)))
     return crops

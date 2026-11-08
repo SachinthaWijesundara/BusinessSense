@@ -5,3 +5,4 @@ __pycache__/
 *.png
 debug_previews/
 .pytest_cache/
+tests/pglite/node_modules/

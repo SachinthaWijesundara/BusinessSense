@@ -1,23 +1,31 @@
 # BusinessSense
 
-Owner UI + invoice extract API. Layout matches this repo:
+Invoice management and purchasing intelligence for SMEs (ModelX 2.0, Team DeepForge).
 
-- `frontend/` — Next.js Invoice Manager (port 3001)
-- `backend/` — FastAPI CLAHE + vision extract (port 8765)
+| Part | Stack | Hosted on |
+|---|---|---|
+| `frontend/` | Next.js owner app (five screens) | Vercel |
+| `backend/` | FastAPI: invoice API, agent pipeline, business rules | Render (`render.yaml`) |
+| `supabase/migrations/` | Postgres schema, pgvector, storage bucket, RLS | Supabase |
 
-## Setup
+The browser talks only to the FastAPI backend; OpenAI and Supabase service keys stay on Render.
+See [backend/README.md](backend/README.md) for the pipeline, endpoints and tests.
 
-1. Copy `.env.example` → `.env` at the **repo root** (`BusinessSense/.env`) and fill keys.
-2. Backend:
+## Local setup
+
+1. Copy `.env.example` to `.env` at the repo root and fill in the keys.
+2. Database: apply `supabase/migrations/*.sql` in order (Supabase CLI `supabase db push`, or the SQL
+   editor). Skip the RLS migration until the frontend goes through the API (see its header).
+3. Backend (port 8765 matches the frontend's default `NEXT_PUBLIC_EXTRACT_API_URL`):
 
 ```bash
 cd backend
 python -m venv .venv
-.\.venv\Scripts\pip install -r requirements.txt
-.\.venv\Scripts\uvicorn.exe main:app --reload --host 127.0.0.1 --port 8765
+.venv\Scripts\pip install -r requirements-dev.txt
+.venv\Scripts\uvicorn main:app --reload --port 8765
 ```
 
-3. Frontend:
+4. Frontend:
 
 ```bash
 cd frontend
@@ -25,6 +33,4 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3001
-
-For invoice photo storage, run `../purchase-entry/supabase/invoice_images.sql` (or the shared schema) in the Supabase SQL editor if needed.
+Open http://localhost:3001. API docs: http://localhost:8765/docs
