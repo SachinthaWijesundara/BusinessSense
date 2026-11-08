@@ -1,0 +1,259 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f3f6f4;
+  --foreground: #1c2a24;
+  --surface: #ffffff;
+  --brand: #1f6f54;
+  --brand-deep: #154936;
+  --line: #c5d4cc;
+  --muted: #5a6f66;
+  --accent: #c4a35a;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-source-sans);
+}
+
+html,
+body {
+  background: var(--background);
+  color: var(--foreground);
+  min-height: 100%;
+}
+
+body {
+  font-family: var(--font-source-sans), "Segoe UI", sans-serif;
+}
+
+.bs-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+}
+
+@media (max-width: 840px) {
+  .bs-shell {
+    grid-template-columns: 1fr;
+  }
+}
+
+.bs-nav {
+  background: linear-gradient(180deg, var(--brand-deep), #0f2f24);
+  color: #e8f2ec;
+  padding: 1.25rem 1rem;
+}
+
+.bs-nav a {
+  display: block;
+  padding: 0.55rem 0.75rem;
+  border-radius: 4px;
+  color: #d5e8dd;
+  text-decoration: none;
+  font-size: 0.92rem;
+}
+
+.bs-nav a:hover {
+  background: rgb(255 255 255 / 8%);
+}
+
+.bs-nav a.active {
+  background: rgb(255 255 255 / 14%);
+  color: #fff;
+  font-weight: 600;
+}
+
+.bs-main {
+  padding: 1.5rem 1.75rem 2.5rem;
+}
+
+.bs-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1.5rem;
+  box-shadow: 0 1px 2px rgb(21 73 54 / 6%);
+}
+
+.bs-empty {
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  padding: 2.5rem 1.25rem;
+  text-align: center;
+  color: var(--muted);
+  background: #fafcfb;
+}
+
+.field {
+  width: 100%;
+  border: 1px solid #9bb5a8;
+  background: #fff;
+  padding: 0.4rem 0.55rem;
+  border-radius: 3px;
+}
+
+.field:focus {
+  outline: 2px solid var(--brand);
+  outline-offset: 0;
+  border-color: var(--brand);
+}
+
+.field-readonly {
+  background: #f7faf8;
+}
+
+.field-missing,
+.cell-input.field-missing {
+  border-color: #c53030 !important;
+  background: #fff5f5;
+  box-shadow: 0 0 0 1px #feb2b2;
+}
+
+.label-missing {
+  color: #9b2c2c !important;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: 3px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--brand);
+  color: #fff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--brand-deep);
+}
+
+.btn-secondary {
+  background: #fff;
+  color: var(--brand-deep);
+  border-color: var(--brand);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #eef5f1;
+}
+
+.btn-danger {
+  background: #fff;
+  color: #9b2c2c;
+  border-color: #c53030;
+}
+
+.entry-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.entry-table th,
+.entry-table td {
+  border: 1px solid #9bb5a8;
+  padding: 0.2rem;
+  vertical-align: middle;
+}
+
+.entry-table th {
+  background: #e8f2ec;
+  font-weight: 650;
+  text-align: left;
+  padding: 0.4rem 0.45rem;
+  color: var(--brand-deep);
+}
+
+.entry-table .cell-input {
+  width: 100%;
+  border: 0;
+  padding: 0.35rem 0.4rem;
+  background: transparent;
+}
+
+.entry-table .cell-input:focus {
+  outline: 2px solid var(--brand);
+  background: #fff;
+}
+
+.entry-table tfoot td {
+  background: #f7faf8;
+  font-weight: 650;
+}
+
+.banner-error {
+  background: #fff5f5;
+  color: #9b2c2c;
+  border: 1px solid #feb2b2;
+  padding: 0.65rem 0.8rem;
+  border-radius: 4px;
+}
+
+.banner-ok {
+  background: #f0fff4;
+  color: #276749;
+  border: 1px solid #9ae6b4;
+  padding: 0.65rem 0.8rem;
+  border-radius: 4px;
+}
+
+.banner-partial {
+  background: #fffaf0;
+  color: #9c4221;
+  border: 1px solid #f6ad55;
+  padding: 0.65rem 0.8rem;
+  border-radius: 4px;
+}
+
+.dropzone {
+  border: 2px dashed #9bb5a8;
+  background: #fafcfb;
+  border-radius: 6px;
+  padding: 1.25rem 1rem;
+  cursor: pointer;
+}
+
+.dropzone:hover:not(.dropzone-disabled) {
+  border-color: var(--brand);
+  background: #eef5f1;
+}
+
+.dropzone-active {
+  border-color: var(--brand);
+  background: #e6f4ec;
+}
+
+.dropzone-disabled {
+  opacity: 0.75;
+  cursor: wait;
+}
+
+.extract-spinner {
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 3px solid #c5d4cc;
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: extract-spin 0.8s linear infinite;
+}
+
+@keyframes extract-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
