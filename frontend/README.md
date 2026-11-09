@@ -1,15 +1,19 @@
 # BusinessSense frontend
 
-Owner product UI (five screens). Shares the same Supabase project as `purchase-entry`.
+Owner product UI. Shares the same Supabase project as `purchase-entry`.
+
+Config lives in the **repo-root** `BusinessSense/.env` only (loaded by `next.config.ts`).
 
 ```powershell
-cd BusinessSense/frontend
+cd BusinessSense
+copy .env.example .env
+# fill NEXT_PUBLIC_SUPABASE_* and OPENAI_* in .env
+
+cd frontend
 npm install
-copy .env.example .env.local
-# Use the same NEXT_PUBLIC_SUPABASE_* values as purchase-entry
 npm run dev
 ```
 
 App: http://localhost:3001
 
-Extract API (separate process): http://localhost:8001 — set `OPENAI_API_KEY` in `BusinessSense/backend/.env`.
+Extract API: http://localhost:8765 (see `../backend`).

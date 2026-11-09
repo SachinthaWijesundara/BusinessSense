@@ -4,7 +4,7 @@ import { loadEnvConfig } from "@next/env";
 import type { NextConfig } from "next";
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
-// Load BusinessSense/.env (parent of frontend/) so Supabase + extract URL live in one file.
+// Single env file: BusinessSense/.env (repo root)
 loadEnvConfig(path.join(projectRoot, ".."));
 
 const nextConfig: NextConfig = {

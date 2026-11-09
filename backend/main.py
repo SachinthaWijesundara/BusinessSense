@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.extract import router as extract_router
 
-# Load BusinessSense/.env (repo root), not backend/.env
+# Single env file: BusinessSense/.env (repo root)
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 app = FastAPI(title="BusinessSense Extract API", version="0.1.0")
