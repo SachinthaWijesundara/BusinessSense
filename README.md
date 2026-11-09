@@ -49,6 +49,12 @@ Open http://localhost:3001. The API's own docs are at http://localhost:8765/docs
   (the Vercel address).
 - **Vercel**: root directory `frontend`; set `NEXT_PUBLIC_API_URL` to the Render address.
 
+## Checks (CI)
+
+`.github/workflows/ci.yml` runs on every push and pull request: the backend test suite (on a throwaway
+Postgres, no secrets needed) and the frontend lint + production build. Render and Vercel deploy by
+themselves; in Render, turn on "wait for CI checks to pass" so a failing commit is never deployed.
+
 ## Privacy
 
 This repository is public. Never commit the participating shop's real name, supplier names, invoices or
