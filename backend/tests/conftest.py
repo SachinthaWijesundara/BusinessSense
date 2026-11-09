@@ -88,7 +88,10 @@ def pg_server_url() -> Iterator[str]:
         return
     node = shutil.which("node")
     if not node or not (PGLITE_DIR / "node_modules").exists():
-        pytest.skip("No test database: run `npm install` in backend/tests/pglite or set TEST_DATABASE_URL")
+        message = "No test database: run `npm install` in backend/tests/pglite or set TEST_DATABASE_URL"
+        if os.getenv("CI"):  # GitHub Actions sets CI=true: a missing database must fail, not skip
+            pytest.fail(message)
+        pytest.skip(message)
     port = _free_port()
     proc = subprocess.Popen([node, "server.mjs", str(port)], cwd=PGLITE_DIR,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)

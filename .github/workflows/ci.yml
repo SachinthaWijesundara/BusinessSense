@@ -1,0 +1,84 @@
+# Continuous integration for BusinessSense.
+#
+# On every push and every pull request into main, GitHub runs the same checks the team runs by hand:
+#   backend  - the full pytest suite (rules, agents with scripted models, database client and SQL files
+#              on a throwaway Postgres + pgvector, every API endpoint). No secrets are needed: OpenAI is
+#              replaced by scripted test models and the real Supabase project is never touched.
+#   frontend - eslint and a production build (which also type-checks every file).
+# Deployment is not done here: Render (backend) and Vercel (frontend) deploy from GitHub themselves.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+# A newer push to the same branch cancels the older, still-running check.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moves without notice (26.04 lacks Python 3.13.7)
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v5
+
+      - name: Set up Python (same version as Render)
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13.7"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Set up Node (runs the throwaway test database)
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: backend/tests/pglite/package-lock.json
+
+      - name: Install the backend's Python libraries
+        run: pip install -r requirements.txt pytest==9.2.0
+
+      - name: Install the test database (PGlite + pgvector)
+        run: npm ci
+        working-directory: backend/tests/pglite
+
+      - name: Run the test suite
+        run: python -m pytest
+
+  frontend:
+    name: Frontend lint and build
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moves without notice (26.04 lacks Python 3.13.7)
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install the frontend's libraries
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Production build (also type-checks)
+        run: npm run build
