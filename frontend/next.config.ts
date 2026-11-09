@@ -1,11 +1,11 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadEnvConfig } from "@next/env";
 import type { NextConfig } from "next";
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
-// Single env file: BusinessSense/.env (repo root)
-loadEnvConfig(path.join(projectRoot, ".."));
+
+// Supabase / extract URL come from BusinessSense/.env via a hard-link at frontend/.env
+// (one physical file; Next loads frontend/.env natively for NEXT_PUBLIC_*).
 
 const nextConfig: NextConfig = {
   turbopack: {

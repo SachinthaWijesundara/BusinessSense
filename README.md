@@ -7,7 +7,10 @@ Owner UI + invoice extract API. Layout matches this repo:
 
 ## Setup
 
-1. Copy `.env.example` → `.env` at the **repo root** (`BusinessSense/.env`) and fill keys.
+1. Copy `.env.example` → `.env` at the **repo root** (`BusinessSense/.env`) and fill keys.  
+   Next.js needs that file visible as `frontend/.env` — create a hard link once (Windows):  
+   `cmd /c mklink /H frontend\.env .env`  
+   (one physical file; edit only the root `.env`).
 2. Backend:
 
 ```bash
