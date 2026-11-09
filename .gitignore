@@ -1,28 +1,23 @@
-# Secrets
-.env
-frontend/.env
-frontend/.env.local
-frontend/.env.*.local
-backend/.env
+# BusinessSense: files Git must never upload.
 
-# Frontend
+# Secrets: each app keeps its real keys in its own .env (see frontend/.env.example, backend/.env.example)
+.env
+.env.local
+.env.*.local
+
+# Frontend: downloaded libraries and build output
 frontend/node_modules/
 frontend/.next/
 frontend/tsconfig.tsbuildinfo
-frontend/*.log
 
-# Backend
+# Backend: virtual environment, Python caches, test caches, the test database's libraries
 backend/.venv/
-backend/__pycache__/
-backend/**/__pycache__/
-backend/*.pyc
-backend/debug_previews/
+__pycache__/
+*.pyc
 backend/.pytest_cache/
-backend/clahe_src.jpg
-backend/clahe_test.png
-backend/tiny.png
+backend/tests/pglite/node_modules/
 
-# OS / editor
+# Editor and operating-system files
 .DS_Store
 .cursor/
 *.log

@@ -1,5 +1,9 @@
 "use client";
 
+/**
+ * Sidebar navigation for the five screens in the proposal, around the current screen.
+ */
+
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -11,6 +15,7 @@ const NAV = [
   { href: "/cash-planner", label: "Purchasing Cash Planner" },
 ] as const;
 
+/** Page frame: the sidebar with the active screen highlighted, and the screen itself. */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
@@ -19,7 +24,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <aside className="bs-nav">
         <div className="mb-6 px-2">
           <p className="text-lg font-semibold tracking-wide text-white">BusinessSense</p>
-          <p className="mt-1 text-xs text-[#a8c4b6]">Owner product · shared ledger</p>
+          <p className="mt-1 text-xs text-[#a8c4b6]">Owner app · purchasing intelligence</p>
         </div>
         <nav className="flex flex-col gap-1">
           {NAV.map((item) => {

@@ -1,3 +1,7 @@
+/**
+ * Root layout: loads the font and global styles and wraps every screen in the sidebar shell.
+ */
+
 import type { Metadata } from "next";
 import { Source_Sans_3 } from "next/font/google";
 import { AppShell } from "@/components/AppShell";
@@ -13,6 +17,7 @@ export const metadata: Metadata = {
   description: "Invoice management and purchasing intelligence",
 };
 
+/** The HTML page every screen is rendered inside. */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">

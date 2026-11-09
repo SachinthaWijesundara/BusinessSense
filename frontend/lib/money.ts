@@ -1,39 +1,32 @@
-export function toNumber(value: string | number | null | undefined): number {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : 0;
-  }
-  if (value == null || value === "") return 0;
-  const n = Number.parseFloat(String(value).replace(/,/g, "").trim());
-  return Number.isFinite(n) ? n : 0;
+/**
+ * Display helpers for numbers in forms and tables.
+ * No business maths here: totals, balances and audits all come from the backend.
+ */
+
+/** Show a rupee amount like "5,850.00", or "—" when there is none. */
+export function money(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return value.toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
+/** Turn a number into text for an input box ("" when empty). */
+export function numberText(value: number | null | undefined): string {
+  return value === null || value === undefined ? "" : String(value);
 }
 
-export function round3(n: number): number {
-  return Math.round((n + Number.EPSILON) * 1000) / 1000;
+/**
+ * Read a number the owner typed ("1,250.50" -> 1250.5).
+ * Returns null for an empty box and NaN for text that is not a number, so forms can complain.
+ */
+export function parseNumber(input: string): number | null {
+  const cleaned = input.replace(/,/g, "").trim();
+  if (cleaned === "") return null;
+  const value = Number(cleaned);
+  return Number.isFinite(value) ? value : Number.NaN;
 }
 
-export function lineTotal(quantity: number, mro: number, discount: number): number {
-  return round2(quantity * mro - discount);
-}
-
-export function money(n: number): string {
-  return n.toLocaleString("en-LK", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
-export function emptyToNull(value: string): string | null {
-  const t = value.trim();
-  return t === "" ? null : t;
-}
-
-export function newKey(): string {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  return `k-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+/** Turn a typed text into a value to send: trimmed text, or null when empty. */
+export function textOrNull(input: string): string | null {
+  const trimmed = input.trim();
+  return trimmed === "" ? null : trimmed;
 }

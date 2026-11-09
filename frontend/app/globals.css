@@ -1,3 +1,4 @@
+/* Global styles for the BusinessSense owner app: colours, layout shell, cards, forms, tables, badges. */
 @import "tailwindcss";
 
 :root {
@@ -257,3 +258,59 @@ body {
     transform: rotate(360deg);
   }
 }
+
+/* Values the reading agent was unsure about (shown for the owner to double-check). */
+.field-unsure,
+.cell-input.field-unsure {
+  border-color: #d69e2e !important;
+  background: #fffbea;
+}
+
+/* A line the math audit flagged. */
+.row-issue td {
+  background: #fff5f5;
+}
+
+/* Small status labels: draft, verified, rejected, paid, linked, pending... */
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  background: #f7faf8;
+  color: var(--brand-deep);
+}
+
+.badge-good {
+  background: #f0fff4;
+  border-color: #9ae6b4;
+  color: #276749;
+}
+
+.badge-warn {
+  background: #fffaf0;
+  border-color: #f6ad55;
+  color: #9c4221;
+}
+
+.badge-bad {
+  background: #fff5f5;
+  border-color: #feb2b2;
+  color: #9b2c2c;
+}
+
+/* Horizontal bar for the dashboard's monthly purchases. */
+.bar-track {
+  height: 0.6rem;
+  background: #eef3f0;
+  border-radius: 3px;
+}
+
+.bar-fill {
+  height: 100%;
+  background: var(--brand);
+  border-radius: 3px;
+}
+

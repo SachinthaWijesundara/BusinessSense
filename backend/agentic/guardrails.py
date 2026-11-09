@@ -1,10 +1,10 @@
-"""Checks on InvoiceVisionAgent output.
+"""The output guardrail on InvoiceVisionAgent, and the list of fields it left empty.
 
 * ``blocking_fields`` drives the Agents SDK output guardrail: an invoice with no line items or no
-  date (or a receipt with nothing on it) trips the wire, nothing is saved, and the owner is asked
+  date (or a receipt with nothing on it) trips the wire. Nothing is saved and the owner is asked
   to retake the photo.
 * ``missing_fields`` lists required fields that are empty but do not block; the invoice is saved
-  as a draft with those fields highlighted for the owner.
+  as a draft with those fields highlighted.
 """
 
 from __future__ import annotations
@@ -17,10 +17,12 @@ from .schemas import ExtractedDocument, usable_lines
 
 
 def _blank(value: object) -> bool:
+    """True for None or text that is only spaces."""
     return value is None or not str(value).strip()
 
 
 def blocking_fields(doc: ExtractedDocument) -> list[str]:
+    """Fields whose absence makes the read unusable (the guardrail's tripwire)."""
     if doc.doc_type == "invoice":
         inv = doc.invoice
         if inv is None:
@@ -36,8 +38,7 @@ def blocking_fields(doc: ExtractedDocument) -> list[str]:
     if rec is None:
         return ["receipt.payments"]
     has_payment = any(
-        not _blank(payment.invoice_number) or payment.amount is not None
-        for payment in rec.payments
+        not _blank(payment.invoice_number) or payment.amount is not None for payment in rec.payments
     )
     if not has_payment and _blank(rec.receipt_number):
         return ["receipt.payments"]
@@ -45,7 +46,7 @@ def blocking_fields(doc: ExtractedDocument) -> list[str]:
 
 
 def missing_fields(doc: ExtractedDocument) -> list[str]:
-    """Required fields that are empty for this document type."""
+    """Required fields that are empty for this kind of document."""
     missing: list[str] = []
     supplier_name = doc.supplier.name if doc.supplier else None
 
@@ -54,8 +55,7 @@ def missing_fields(doc: ExtractedDocument) -> list[str]:
             missing.append("supplier.name")
         inv = doc.invoice
         if inv is None:
-            missing.extend(["invoice.invoice_number", "invoice.invoice_date", "invoice.lines"])
-            return missing
+            return [*missing, "invoice.invoice_number", "invoice.invoice_date", "invoice.lines"]
         if _blank(inv.invoice_number):
             missing.append("invoice.invoice_number")
         if _blank(inv.invoice_date):
@@ -68,8 +68,7 @@ def missing_fields(doc: ExtractedDocument) -> list[str]:
 
     rec = doc.receipt
     if rec is None:
-        missing.extend(["receipt.receipt_number", "receipt.receipt_date", "receipt.payments"])
-        return missing
+        return ["receipt.receipt_number", "receipt.receipt_date", "receipt.payments"]
     if _blank(rec.receipt_number):
         missing.append("receipt.receipt_number")
     if _blank(rec.receipt_date):
@@ -79,9 +78,7 @@ def missing_fields(doc: ExtractedDocument) -> list[str]:
     usable_payments = [
         payment
         for payment in rec.payments
-        if not _blank(payment.invoice_number)
-        and payment.amount is not None
-        and float(payment.amount) > 0
+        if not _blank(payment.invoice_number) and payment.amount is not None and float(payment.amount) > 0
     ]
     if not usable_payments:
         missing.append("receipt.payments")
@@ -92,6 +89,7 @@ def missing_fields(doc: ExtractedDocument) -> list[str]:
 async def readable_document_guardrail(
     ctx: RunContextWrapper[Any], agent: Agent[Any], output: ExtractedDocument
 ) -> GuardrailFunctionOutput:
+    """Trip when the agent's answer has no line items or no date (SDK output guardrail)."""
     blocking = blocking_fields(output)
     return GuardrailFunctionOutput(
         output_info={

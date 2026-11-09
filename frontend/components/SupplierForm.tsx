@@ -1,210 +1,108 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
-import { DocumentUpload } from "@/components/DocumentUpload";
-import { SetupNotice } from "@/components/SetupNotice";
-import { peekExtractDraft, peekMissingFields } from "@/lib/extractDraft";
-import { emptyToNull, toNumber } from "@/lib/money";
-import { db, friendlyError, isSupabaseConfigured } from "@/lib/supabase";
+/**
+ * Add-supplier form. Sends the details to the backend (POST /suppliers) and hands the saved
+ * supplier back to the screen that opened it (Supplier Profile, or the review screen when a
+ * photo's supplier is not recognised).
+ */
 
-export function SupplierForm() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const [name, setName] = useState("");
+import { useState, type FormEvent } from "react";
+import { createSupplier, errorMessage } from "@/lib/api";
+import { parseNumber, textOrNull } from "@/lib/money";
+import type { Supplier } from "@/lib/types";
+
+type Props = {
+  initialName?: string;
+  onCreated: (supplier: Supplier) => void;
+  onCancel?: () => void;
+};
+
+/** The supplier fields and a Save button. */
+export function SupplierForm({ initialName = "", onCreated, onCancel }: Props) {
+  const [name, setName] = useState(initialName);
   const [creditDays, setCreditDays] = useState("");
   const [phone1, setPhone1] = useState("");
   const [phone2, setPhone2] = useState("");
   const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
-  const [related1, setRelated1] = useState("");
-  const [related2, setRelated2] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [prefillNote, setPrefillNote] = useState("");
-  const [missing, setMissing] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    const draft = peekExtractDraft();
-    const fromExtract = searchParams.get("fromExtract") === "1";
-    if (!draft?.supplier && !fromExtract) return;
-    if (!draft?.supplier) return;
-    if (draft.supplier.name) setName(draft.supplier.name);
-    if (draft.supplier.phone1) setPhone1(draft.supplier.phone1);
-    if (draft.supplier.address) setAddress(draft.supplier.address);
-    const miss = new Set(peekMissingFields());
-    if (!draft.supplier.name?.trim()) miss.add("supplier.name");
-    setMissing(miss);
-    setPrefillNote(
-      miss.size > 0
-        ? "Partial read — complete highlighted supplier fields, then Save to continue to the invoice."
-        : "Prefilling from photo. Verify and Save supplier — then the invoice form opens. Nothing is saved until you press Save.",
-    );
-  }, [searchParams]);
-
-  function clearMissing(key: string) {
-    setMissing((current) => {
-      if (!current.has(key)) return current;
-      const next = new Set(current);
-      next.delete(key);
-      return next;
-    });
-  }
-
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
+  /** Check the fields, save the supplier through the backend and report it to the parent. */
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    const days = parseNumber(creditDays);
     if (!name.trim()) {
-      setError("Supplier name is required.");
-      setMissing((m) => new Set(m).add("supplier.name"));
+      setError("Enter the supplier name.");
+      return;
+    }
+    if (days !== null && (Number.isNaN(days) || days < 0 || !Number.isInteger(days))) {
+      setError("Credit days must be a whole number (0 or more).");
       return;
     }
     setSaving(true);
     setError("");
-    const payload = {
-      name: name.trim(),
-      credit_days: creditDays.trim() === "" ? null : Math.round(toNumber(creditDays)),
-      phone1: emptyToNull(phone1),
-      phone2: emptyToNull(phone2),
-      email: emptyToNull(email),
-      address: emptyToNull(address),
-      related_company_1: emptyToNull(related1),
-      related_company_2: emptyToNull(related2),
-      updated_at: new Date().toISOString(),
-    };
     try {
-      const { data, error: insertError } = await db()
-        .from("suppliers")
-        .insert(payload)
-        .select("id")
-        .single();
-      if (insertError) throw insertError;
-      const draft = peekExtractDraft();
-      if (draft?.doc_type === "invoice") {
-        router.push(`/invoice-manager/${data.id}/new`);
-      } else {
-        router.push("/invoice-manager");
-      }
+      const supplier = await createSupplier({
+        name: name.trim(),
+        credit_days: days,
+        phone1: textOrNull(phone1),
+        phone2: textOrNull(phone2),
+        email: textOrNull(email),
+        address: textOrNull(address),
+      });
+      onCreated(supplier);
     } catch (err) {
-      setError(friendlyError(err));
+      setError(errorMessage(err));
       setSaving(false);
     }
   }
 
-  if (!isSupabaseConfigured) return <SetupNotice />;
-
-  const nameMissing = missing.has("supplier.name") && !name.trim();
-
   return (
-    <div className="space-y-4">
-      <DocumentUpload />
-      <form onSubmit={onSubmit} className="bs-card">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <Link href="/invoice-manager" className="text-sm text-[var(--brand)] hover:underline">
-              ← Invoice Manager
-            </Link>
-            <h1 className="mt-1 text-xl font-semibold text-[var(--brand-deep)]">New supplier</h1>
-            <p className="mt-1 text-sm text-[var(--muted)]">
-              Verify details, then Save before the invoice form.
-            </p>
-          </div>
-        </div>
-
-        {prefillNote ? (
-          <p className={`mt-4 text-sm ${missing.size > 0 ? "banner-partial" : "banner-ok"}`}>
-            {prefillNote}
-          </p>
-        ) : null}
-        {error ? <p className="banner-error mt-4">{error}</p> : null}
-
-        <div className="mt-5 grid gap-4 sm:grid-cols-2">
-          <label className="block sm:col-span-2">
-            <span
-              className={`mb-1 block text-sm font-medium ${nameMissing ? "label-missing" : ""}`}
-            >
-              Supplier name
-            </span>
-            <input
-              className={`field ${nameMissing ? "field-missing" : ""}`}
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value);
-                clearMissing("supplier.name");
-              }}
-              required
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-sm font-medium">Credit days</span>
-            <input
-              className="field"
-              inputMode="numeric"
-              value={creditDays}
-              onChange={(e) => setCreditDays(e.target.value)}
-              placeholder="e.g. 15"
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-sm font-medium">Email</span>
-            <input
-              className="field"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-sm font-medium">Phone number 1</span>
-            <input
-              className="field"
-              value={phone1}
-              onChange={(e) => setPhone1(e.target.value)}
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-sm font-medium">Phone number 2</span>
-            <input
-              className="field"
-              value={phone2}
-              onChange={(e) => setPhone2(e.target.value)}
-            />
-          </label>
-          <label className="block sm:col-span-2">
-            <span className="mb-1 block text-sm font-medium">Address</span>
-            <textarea
-              className="field min-h-20"
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-sm font-medium">Related company 1</span>
-            <input
-              className="field"
-              value={related1}
-              onChange={(e) => setRelated1(e.target.value)}
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-sm font-medium">Related company 2</span>
-            <input
-              className="field"
-              value={related2}
-              onChange={(e) => setRelated2(e.target.value)}
-            />
-          </label>
-        </div>
-
-        <div className="mt-6 flex gap-3">
-          <button className="btn btn-primary" type="submit" disabled={saving}>
-            {saving ? "Saving…" : "Save supplier"}
-          </button>
-          <Link href="/invoice-manager" className="btn btn-secondary">
+    <form onSubmit={handleSubmit} className="space-y-3">
+      {error ? <p className="banner-error">{error}</p> : null}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block sm:col-span-2">
+          <span className="mb-1 block text-sm font-medium">Supplier name</span>
+          <input className="field" value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium">Usual credit days</span>
+          <input
+            className="field"
+            inputMode="numeric"
+            placeholder="e.g. 30"
+            value={creditDays}
+            onChange={(event) => setCreditDays(event.target.value)}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium">Email</span>
+          <input className="field" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium">Phone 1</span>
+          <input className="field" value={phone1} onChange={(event) => setPhone1(event.target.value)} />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium">Phone 2</span>
+          <input className="field" value={phone2} onChange={(event) => setPhone2(event.target.value)} />
+        </label>
+        <label className="block sm:col-span-2">
+          <span className="mb-1 block text-sm font-medium">Address</span>
+          <textarea className="field min-h-16" value={address} onChange={(event) => setAddress(event.target.value)} />
+        </label>
+      </div>
+      <div className="flex gap-3">
+        <button className="btn btn-primary" type="submit" disabled={saving}>
+          {saving ? "Saving…" : "Save supplier"}
+        </button>
+        {onCancel ? (
+          <button type="button" className="btn btn-secondary" onClick={onCancel}>
             Cancel
-          </Link>
-        </div>
-      </form>
-    </div>
+          </button>
+        ) : null}
+      </div>
+    </form>
   );
 }

@@ -1,5 +1,6 @@
-# Render Blueprint for the BusinessSense API (FastAPI). New > Blueprint > pick this repo.
-# Secrets marked sync: false are entered in the Render dashboard, never committed.
+# Render Blueprint for the BusinessSense API (FastAPI backend). Render > New > Blueprint > this repo.
+# Secrets marked sync: false are typed into the Render dashboard, never committed.
+# DATABASE_URL is required (Supabase > Connect > Transaction pooler); the API will not start without it.
 services:
   - type: web
     name: businesssense-api
@@ -12,10 +13,10 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.7
-      - key: REQUIRE_DATABASE
-        value: "true"
+      # The proposal's model is gpt-4o. The team's OpenAI key currently allows only gpt-4o-mini:
+      # change this to gpt-4o once the OpenAI project allows it.
       - key: INVOICE_VISION_MODEL
-        value: gpt-4o
+        value: gpt-4o-mini
       - key: SKU_MATCH_MODEL
         value: gpt-4o-mini
       - key: OPENAI_API_KEY
@@ -27,4 +28,7 @@ services:
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: ALLOWED_ORIGINS
+        sync: false
+      # Optional: a pattern for Vercel preview addresses, e.g. https://businesssense-.*\.vercel\.app
+      - key: ALLOWED_ORIGIN_REGEX
         sync: false

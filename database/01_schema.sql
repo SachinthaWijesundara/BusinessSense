@@ -1,10 +1,14 @@
--- BusinessSense core schema (proposal section 7.1).
+-- 01_schema.sql: the BusinessSense tables in Supabase Postgres (proposal section 7.1).
 --
--- Safe to run on a fresh Supabase project AND on a project that already has the tables the
--- first prototype created (suppliers, invoices, invoice_items): everything is
--- "create ... if not exists" / "add column if not exists", nothing is dropped.
+-- Creates: businesses, suppliers, products (master catalogue), product_aliases (printed names
+-- with pgvector embeddings), invoices, invoice_items, supplier_payments, expenses, cash_records,
+-- model_predictions, extraction_runs (raw agent outputs), audit_log, and the
+-- match_product_aliases() search used by SkuMatchAgent's find_sku_candidates tool.
 --
--- Apply with the Supabase CLI (`supabase db push`) or paste into the SQL editor.
+-- Apply the three files in order (01, 02, 03) in the Supabase SQL editor.
+-- Safe on a fresh project AND on the project the first prototype and the data-entry app already
+-- use (suppliers, invoices, invoice_items, items): everything is "create ... if not exists" /
+-- "add column if not exists", nothing is dropped, and re-running it changes nothing.
 
 create schema if not exists extensions;
 create extension if not exists vector with schema extensions;
@@ -78,8 +82,29 @@ create index if not exists product_aliases_lookup_idx
 create index if not exists product_aliases_embedding_idx
   on product_aliases using hnsw (embedding vector_cosine_ops);
 
--- The first prototype's frontend reads/writes an "items" list. On a fresh project, expose the
--- catalogue under that name (an updatable view) so that screen keeps working.
+-- The data-entry app keeps its catalogue in an "items" table. Copy those items into products
+-- once (names already in products are skipped, ignoring case), so SkuMatchAgent can match them.
+do $$
+begin
+  if exists (
+    select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relname = 'items' and c.relkind = 'r'
+  ) then
+    insert into products (name, sku)
+    select distinct on (lower(trim(i.name))) trim(i.name), i.sku
+    from items i
+    where trim(coalesce(i.name, '')) <> ''
+      and not exists (
+        select 1 from products p
+        where p.business_id = '00000000-0000-0000-0000-000000000001'
+          and lower(p.name) = lower(trim(i.name))
+      )
+    order by lower(trim(i.name)), i.sku nulls last;
+  end if;
+end $$;
+
+-- On a fresh project there is no "items" table: expose the catalogue under that name (an
+-- updatable view) so the data-entry app can still read and add items.
 do $$
 begin
   if to_regclass('public.items') is null then

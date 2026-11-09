@@ -1,36 +1,55 @@
 # BusinessSense
 
 Invoice management and purchasing intelligence for SMEs (ModelX 2.0, Team DeepForge).
+The repository follows the proposal's architecture: three parts, each with one job.
 
-| Part | Stack | Hosted on |
+| Folder | What it is | Runs on |
 |---|---|---|
-| `frontend/` | Next.js owner app (five screens) | Vercel |
-| `backend/` | FastAPI: invoice API, agent pipeline, business rules | Render (`render.yaml`) |
-| `supabase/migrations/` | Postgres schema, pgvector, storage bucket, RLS | Supabase |
+| [`frontend/`](frontend/README.md) | Next.js owner app: the five screens. It only sends HTTP GET/POST requests to the backend; it holds no keys and does no business logic. | Vercel |
+| [`backend/`](backend/README.md) | FastAPI: invoice API, the OpenAI Agents SDK pipeline (InvoiceVisionAgent, SkuMatchAgent), the business rules, and all reads/writes to Supabase. | Render (`render.yaml`) |
+| `database/` | The Supabase PostgreSQL schema, as three SQL files applied in order. | Supabase |
 
-The browser talks only to the FastAPI backend; OpenAI and Supabase service keys stay on Render.
-See [backend/README.md](backend/README.md) for the pipeline, endpoints and tests.
+```
+Browser (frontend) --HTTPS--> Backend (FastAPI) --SQL--> Supabase Postgres + Storage
+                                     |
+                                     +--HTTPS--> OpenAI (gpt-4o vision, text-embedding-3-small)
+```
 
-## Local setup
+## Set up locally
 
-1. Copy `.env.example` to `.env` at the repo root and fill in the keys.
-2. Database: apply `supabase/migrations/*.sql` in order (Supabase CLI `supabase db push`, or the SQL
-   editor). Skip the RLS migration until the frontend goes through the API (see its header).
-3. Backend (port 8765 matches the frontend's default `NEXT_PUBLIC_EXTRACT_API_URL`):
+1. **Database**: in the Supabase SQL editor run `database/01_schema.sql`, then `database/02_storage.sql`.
+   Run `database/03_row_level_security.sql` once nothing else writes to Supabase with the public anon key.
+2. **Backend** (port 8765):
 
 ```bash
 cd backend
 python -m venv .venv
-.venv\Scripts\pip install -r requirements-dev.txt
+.venv\Scripts\pip install -r requirements.txt
+copy .env.example .env
 .venv\Scripts\uvicorn main:app --reload --port 8765
 ```
 
-4. Frontend:
+   Fill `backend/.env` first (`DATABASE_URL` is required, plus `OPENAI_API_KEY`).
+3. **Frontend** (port 3001):
 
 ```bash
 cd frontend
 npm install
+copy .env.example .env.local
 npm run dev
 ```
 
-Open http://localhost:3001. API docs: http://localhost:8765/docs
+Open http://localhost:3001. The API's own docs are at http://localhost:8765/docs.
+
+## Deploy
+
+- **Supabase**: apply the SQL files as above.
+- **Render**: New > Blueprint > this repository (`render.yaml`); enter `OPENAI_API_KEY`, `DATABASE_URL`
+  (Supabase "Transaction pooler" string), `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `ALLOWED_ORIGINS`
+  (the Vercel address).
+- **Vercel**: root directory `frontend`; set `NEXT_PUBLIC_API_URL` to the Render address.
+
+## Privacy
+
+This repository is public. Never commit the participating shop's real name, supplier names, invoices or
+photos; all test data is fictional.

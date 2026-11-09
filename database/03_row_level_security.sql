@@ -1,12 +1,12 @@
--- Row-level security (proposal section 10: "row-level security in Supabase").
+-- 03_row_level_security.sql: row-level security (proposal section 10).
 --
--- The FastAPI backend connects with the service role / database owner, which bypasses RLS.
--- These policies let a logged-in owner (Supabase Auth) read only their own business's rows,
--- and block the anonymous key entirely.
+-- Turns on RLS for every BusinessSense table. The FastAPI backend connects as the database owner
+-- (DATABASE_URL), which bypasses RLS, so the app keeps working. A logged-in owner (Supabase Auth)
+-- may read only their own business's rows, and the public anon key can read nothing.
 --
--- IMPORTANT: the first prototype's frontend writes to suppliers/invoices/invoice_items directly
--- with the anon key. Apply this migration only after the frontend reads and writes through the
--- FastAPI backend, or those screens will stop saving.
+-- WHEN TO APPLY: once nothing writes to Supabase with the public anon key. The frontend no longer
+-- does (it only calls the backend), but the team's separate data-entry app may still write with
+-- the anon key; apply this after that app goes through the backend or signs in.
 
 create or replace function public.current_business_ids()
 returns setof uuid

@@ -11,6 +11,7 @@ const server = new PGLiteSocketServer({ db, port, host: '127.0.0.1', maxConnecti
 await server.start()
 console.log(`PGLITE_READY ${port}`)
 
+// Stop the server and the database cleanly when the test run ends.
 const shutdown = async () => {
   await server.stop()
   await db.close()
