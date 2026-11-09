@@ -1,0 +1,11 @@
+{
+  "name": "businesssense-test-postgres",
+  "private": true,
+  "type": "module",
+  "description": "In-memory Postgres + pgvector for backend tests (not deployed).",
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.15",
+    "@electric-sql/pglite-pgvector": "0.0.16",
+    "@electric-sql/pglite-socket": "0.2.18"
+  }
+}

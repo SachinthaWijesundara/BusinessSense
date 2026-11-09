@@ -1,0 +1,7 @@
+# Not committed: local secrets, the virtual environment, Python caches and the test database packages.
+.venv/
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+tests/pglite/node_modules/

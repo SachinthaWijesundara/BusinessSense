@@ -1,0 +1,14 @@
+# BusinessSense API runtime dependencies (installed by Render). Versions are pinned to the
+# set the test suite passed with; the proposal asks to pin openai-agents in particular.
+fastapi==0.162.2
+uvicorn[standard]==0.54.0
+openai-agents==0.24.0
+openai==3.3.0
+pydantic==2.14.3
+python-multipart==0.0.33
+python-dotenv==1.2.4
+opencv-python-headless==5.0.0.93
+numpy==2.5.4
+psycopg[binary]==3.3.8
+psycopg-pool==3.3.3
+httpx==0.28.1
