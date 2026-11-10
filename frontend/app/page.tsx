@@ -163,8 +163,43 @@ export default function DashboardPage() {
       </div>
 
       <div className="bs-card">
-        <p className="text-sm font-semibold text-[var(--brand-deep)]">Next-period purchasing forecast</p>
-        <p className="mt-1 text-sm text-[var(--muted)]">{dashboard.forecast_note}</p>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <p className="text-sm font-semibold text-[var(--brand-deep)]">Next 30 days: purchasing forecast</p>
+          <Link href="/cash-planner" className="text-sm text-[var(--brand)] hover:underline">
+            Open the Cash Planner
+          </Link>
+        </div>
+        {dashboard.forecast ? (
+          <>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+                  Expected purchases{dashboard.forecast.is_baseline ? " (baseline)" : ""}
+                </p>
+                <p className="mt-1 text-xl font-semibold text-[var(--brand-deep)]">Rs {money(dashboard.forecast.expected)}</p>
+                {dashboard.forecast.low !== null && dashboard.forecast.high !== null ? (
+                  <p className="text-xs text-[var(--muted)]">
+                    likely Rs {money(dashboard.forecast.low)} – {money(dashboard.forecast.high)}
+                  </p>
+                ) : null}
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+                  Baseline ({dashboard.forecast.baseline_name})
+                </p>
+                <p className="mt-1 text-xl font-semibold text-[var(--brand-deep)]">Rs {money(dashboard.forecast.baseline)}</p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Supplier bills due then</p>
+                <p className="mt-1 text-xl font-semibold text-[var(--brand-deep)]">Rs {money(dashboard.forecast.bills_due)}</p>
+                <p className="text-xs text-[var(--muted)]">Cash to set aside: Rs {money(dashboard.forecast.reserve)}</p>
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-[var(--muted)]">{dashboard.forecast.model_note}</p>
+          </>
+        ) : (
+          <p className="mt-1 text-sm text-[var(--muted)]">{dashboard.forecast_note}</p>
+        )}
       </div>
     </div>
   );

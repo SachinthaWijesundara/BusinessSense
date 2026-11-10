@@ -13,6 +13,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, Request
 
+from services.cash_flow_service import PLANNER_DAYS, CashPlan, cash_plan
 from services.invoice_service import WorkflowError, get_invoice_or_404
 from services.purchase_analysis_service import (
     AnalyticsOverview,
@@ -56,6 +57,16 @@ async def cash(
     return await cash_overview(
         services, business_id, today=date.today(), payable_days=payable_days, months=months
     )
+
+
+@router.get("/cash-plan", response_model=CashPlan)
+async def planner(request: Request, days: int = Query(30)) -> CashPlan:
+    """Purchasing Cash Planner: bills falling due, Model 2's expected purchases beside the baseline,
+    and the recommended purchasing cash reserve for the next ``days`` days (14, 30, 60 or 90)."""
+    if days not in PLANNER_DAYS:
+        raise WorkflowError(422, "invalid_period", f"Plan for {', '.join(map(str, PLANNER_DAYS))} days.")
+    services, business_id = _context(request)
+    return await cash_plan(services, business_id, today=date.today(), days=days)
 
 
 @router.get("/products/{product_id}", response_model=ProductHistory)

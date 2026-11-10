@@ -3,7 +3,8 @@
 Combines the purchase analysis (monthly purchases, supplier spend) and the cash flow (payments due,
 payments waiting for confirmation) services with the review queue. A payment unconfirmed for more
 than two days is listed as a reminder; the first time it is shown, the reminder is recorded.
-The Model 2 forecast is not built yet, so it is null with a note.
+The next-30-day purchasing forecast (Model 2, or its baseline) sits beside its baseline and the
+supplier payments already due in that period (proposal: Dashboard screen).
 """
 
 from __future__ import annotations
@@ -15,14 +16,31 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from database.client import InvoiceSummary, PaymentRecord
-from services.cash_flow_service import PaymentDue, payments_due, reminders
+from services.cash_flow_service import PaymentDue, payments_due, plan_cash, reminders
 from services.purchase_analysis_service import MonthTotal, SupplierSpend, monthly_purchases, supplier_spend
 
 if TYPE_CHECKING:
     from main import AppServices
 
 router = APIRouter(tags=["dashboard"])
-FORECAST_NOTE = "Model 2 (purchasing expenditure forecast) is not built yet."
+FORECAST_DAYS = 30
+FORECAST_NOTE = "Purchases expected in the next 30 days, beside the baseline and the bills already due then."
+
+
+class DashboardForecast(BaseModel):
+    """The next-30-day purchasing forecast beside its baseline and the bills already due."""
+
+    days: int
+    expected: float
+    low: float | None
+    high: float | None
+    method: str
+    is_baseline: bool
+    baseline_name: str
+    baseline: float
+    bills_due: float
+    reserve: float
+    model_note: str
 
 
 class Dashboard(BaseModel):
@@ -35,7 +53,7 @@ class Dashboard(BaseModel):
     payments_due: list[PaymentDue]
     unconfirmed_payments: int = 0
     payment_reminders: list[PaymentRecord] = []
-    forecast: None = None
+    forecast: DashboardForecast | None = None
     forecast_note: str = FORECAST_NOTE
 
 
@@ -67,6 +85,15 @@ async def dashboard(request: Request) -> Dashboard:
     unconfirmed = await services.db.list_payments(business_id, status="unconfirmed")
     dashboard = build_dashboard(await services.db.list_all_invoices(business_id), today=date.today(),
                                 unconfirmed=unconfirmed)
+    model = await services.spend_model(business_id)
+    plan = plan_cash(today=date.today(), days=FORECAST_DAYS, invoices=await services.db.list_all_invoices(business_id),
+                     credit_days={s.id: s.credit_days for s in await services.db.list_suppliers(business_id)},
+                     unconfirmed=unconfirmed, model=model)
+    spend = plan.period_spend
+    dashboard.forecast = DashboardForecast(days=FORECAST_DAYS, expected=spend.expected, low=spend.low, high=spend.high,
+                                           method=spend.method, is_baseline=spend.is_baseline,
+                                           baseline_name=spend.baseline_name, baseline=spend.baseline,
+                                           bills_due=plan.bills_due, reserve=plan.reserve, model_note=plan.model.note)
     await services.db.mark_reminders_sent(
         business_id, [payment.id for payment in dashboard.payment_reminders if payment.reminder_sent_at is None])
     return dashboard

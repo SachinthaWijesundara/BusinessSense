@@ -322,7 +322,9 @@ def test_dashboard(h):
     assert dash["supplier_spend"] == [{"supplier_id": supplier["id"], "supplier_name": "Ceylon Paints", "total": 900.0}]
     [due] = dash["payments_due"]
     assert (due["invoice_number"], due["days_left"], due["total"]) == ("D-1", 5, 900.0)
-    assert dash["forecast"] is None and "Model 2" in dash["forecast_note"]
+    forecast = dash["forecast"]
+    assert (forecast["days"], forecast["is_baseline"], forecast["method"], forecast["low"]) == (30, True, "rolling mean", None)
+    assert "not been trained" in forecast["model_note"] and "30 days" in dash["forecast_note"]
 
 
 def test_cors_and_methods(make_harness):
@@ -871,3 +873,37 @@ def test_cash_overview_series_length_and_monthly(h):
     assert isinstance(overview["spend_by_item"], list)
     assert "overdue" in overview
     assert {"total_owed", "invoice_count", "invoices"} <= set(overview["overdue"])
+
+
+# ---- Purchasing Cash Planner (Model 2) ----------------------------------------------------------
+def test_cash_plan_endpoint_with_and_without_model_2(h):
+    """The planner works before Model 2 is trained (baseline) and with it (range, kept predictions)."""
+    import asyncio
+
+    from ml.spend import add_months, to_bytes, train_purchase_spend
+    from tests.test_planner import seasonal_invoices
+
+    supplier = h.supplier(credit_days=10)
+    verified_invoice(h, supplier["id"], "T-100", day=(date.today() - timedelta(days=5)).isoformat())
+    plan = h.client.get("/analytics/cash-plan", params={"days": 30}).json()
+    assert plan["model"]["trained"] is False and plan["bills_due"] == 6750.0
+    assert [o["invoice_number"] for o in plan["obligations"]] == ["T-100"]
+    assert plan["reserve"] == pytest.approx(plan["bills_due"] + plan["new_purchases_due"]["expected"])
+    assert h.client.get("/analytics/cash-plan", params={"days": 45}).status_code == 422
+    assert h.client.get("/analytics/cash-plan", headers={"Authorization": ""}).status_code == 401
+
+    this_month = date.today().replace(day=1)
+    for k in range(1, 15):  # 14 months of purchases, so there is a history to forecast from
+        verified_invoice(h, supplier["id"], f"M-{k}", total=2000.0 + 50 * k, day=(add_months(this_month, -k) + timedelta(days=4)).isoformat())
+    artifact, _ = train_purchase_spend(seasonal_invoices(40, start=add_months(date.today().replace(day=1), -40)),
+                                       today=date.today(), business_id=BIZ)
+    asyncio.run(h.services.models_storage.put(f"{BIZ}/purchase_spend.joblib", to_bytes(artifact), "application/octet-stream"))
+    h.services._spend_models.clear()
+    plan = h.client.get("/analytics/cash-plan", params={"days": 30}).json()
+    assert plan["model"]["trained"] is True and plan["model"]["version"] == artifact["version"]
+    h.client.get("/analytics/cash-plan", params={"days": 30})
+    saved = h.sql("select model_name, count(*) from model_predictions group by 1")
+    assert len(plan["months"]) == 4 and all(m["low"] is not None for m in plan["months"])
+    assert saved == [("purchase_spend", 4)]
+    dash = h.client.get("/dashboard").json()["forecast"]
+    assert dash["bills_due"] == plan["bills_due"] == 40000.0 and dash["model_note"] == plan["model"]["note"]
