@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * Dashboard screen (proposal): invoices waiting for review, supplier payments due soon, monthly
- * purchases, supplier spending and the forecast slot. Every number comes from GET /dashboard.
+ * Dashboard screen (proposal): invoices waiting for review, supplier payments due soon, payments
+ * waiting for the owner's confirmation (with a reminder after two days), monthly purchases,
+ * supplier spending and the forecast slot. Every number comes from GET /dashboard.
  */
 
 import Link from "next/link";
@@ -54,11 +55,33 @@ export default function DashboardPage() {
         <p className="mt-1 text-sm text-[var(--muted)]">Verified invoices only, so every figure traces back to a checked bill.</p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-4">
         <Stat label="Waiting for review" value={String(dashboard.review_queue)} href="/invoice-manager?status=draft" />
         <Stat label="Verified invoices" value={String(dashboard.verified_invoices)} />
         <Stat label="Payments due (30 days)" value={String(dashboard.payments_due.length)} />
+        <Stat label="Payments to confirm" value={String(dashboard.unconfirmed_payments)} href="/supplier-profile" />
       </div>
+
+      {dashboard.payment_reminders.length > 0 ? (
+        <div className="banner-partial">
+          <p className="font-semibold">
+            Reminder: {dashboard.payment_reminders.length} payment(s) have waited more than two days for your confirmation.
+          </p>
+          <ul className="mt-1 list-disc pl-5 text-sm">
+            {dashboard.payment_reminders.map((payment) => (
+              <li key={payment.id}>
+                {payment.supplier_name ?? payment.supplier_name_raw ?? "Supplier not picked"} · Rs {money(payment.amount)}
+                {payment.receipt_number ? ` · receipt ${payment.receipt_number}` : ""}
+                {payment.paid_on ? ` · paid ${payment.paid_on}` : ""}
+              </li>
+            ))}
+          </ul>
+          <Link href="/supplier-profile" className="mt-1 inline-block text-sm font-medium underline">
+            Check and confirm them on Supplier Profile
+          </Link>
+          <p className="mt-1 text-xs">They stay unconfirmed, and are not counted as paid, until you confirm them.</p>
+        </div>
+      ) : null}
 
       <div className="bs-card overflow-x-auto">
         <p className="mb-2 text-sm font-semibold text-[var(--brand-deep)]">Supplier payments due soon</p>
@@ -72,6 +95,7 @@ export default function DashboardPage() {
                 <th>Supplier</th>
                 <th>Invoice #</th>
                 <th className="text-right">Total</th>
+                <th className="text-right">Still owed</th>
                 <th></th>
               </tr>
             </thead>
@@ -87,6 +111,7 @@ export default function DashboardPage() {
                   <td className="px-2 py-2">{due.supplier_name}</td>
                   <td className="px-2 py-2">{due.invoice_number ?? "—"}</td>
                   <td className="px-2 py-2 text-right">{money(due.total)}</td>
+                  <td className="px-2 py-2 text-right">{money(due.still_owed)}</td>
                   <td className="px-2 py-2 text-right">
                     <Link href={`/invoice-manager/${due.invoice_id}`} className="text-sm text-[var(--brand)] hover:underline">
                       Open

@@ -26,6 +26,7 @@ import {
   setPaymentStatus,
   verifyInvoice,
 } from "@/lib/api";
+import { money } from "@/lib/money";
 import type { AuditEvent, Invoice, InvoiceLine, Product, Supplier } from "@/lib/types";
 
 /** Everything the screen loads from the backend. */
@@ -182,6 +183,12 @@ export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
               </span>
             )}
             <span className="badge">payment: {invoice.payment_status}</span>
+            {invoice.amount_paid > 0 ? <span className="badge">paid so far {money(invoice.amount_paid)}</span> : null}
+            {invoice.supplier_id && invoice.status === "verified" ? (
+              <Link href={`/supplier-profile?supplier=${invoice.supplier_id}`} className="badge hover:underline">
+                payments on Supplier Profile
+              </Link>
+            ) : null}
             {invoice.due_date ? <span className="badge">due {invoice.due_date}</span> : null}
           </div>
         </div>

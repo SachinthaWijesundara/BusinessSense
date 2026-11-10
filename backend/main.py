@@ -3,10 +3,10 @@
 This file holds, in order:
   1. Settings      every setting, read from environment variables (backend/.env locally, the
                    Render dashboard in production). Secrets never reach the browser.
-  2. AppServices   the database, photo storage, embedder and both agents, built once at startup
-                   by ``build_services`` (tests pass fakes for the OpenAI parts).
+  2. AppServices   the database, photo storage, owner login, embedder and both agents, built once
+                   at startup by ``build_services`` (tests pass fakes for the OpenAI parts).
   3. The app       CORS for the frontend's website, JSON errors for refused requests, /health,
-                   and the routers in api/.
+                   the login routes, and the data routes in api/ (each one needs a valid login).
 
 Run locally:  uvicorn main:app --reload --port 8765
 On Render:    uvicorn main:app --host 0.0.0.0 --port $PORT   (see render.yaml)
@@ -25,16 +25,19 @@ from typing import Any
 from agents import set_default_openai_key
 from agents.models.interface import Model
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from agentic.sku_match_agent import SkuMatcher
 from agentic.vision_agent import InvoiceVisionReader
+from api.auth import require_owner
+from api.auth import router as auth_router
 from api.dashboard import router as dashboard_router
 from api.invoices import router as invoices_router
+from api.suppliers import payments_router
 from api.suppliers import router as suppliers_router
-from database.client import Database, RepositoryError, SupabaseStorage
+from database.client import Database, RepositoryError, SupabaseAuth, SupabaseStorage
 from services.alias_service import Embedder, OpenAIEmbedder
 from services.invoice_service import WorkflowError
 
@@ -46,7 +49,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 # 1. Settings
 # =============================================================================================
 
-# Single-shop prototype: every row belongs to this business until owner login is added.
+# Used only when AUTH_REQUIRED=false (local tests); with login, the business comes from the login.
 DEFAULT_BUSINESS_ID = "00000000-0000-0000-0000-000000000001"
 _DEFAULT_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001")
 
@@ -108,7 +111,8 @@ class Settings:
     allowed_origins: tuple[str, ...] = _DEFAULT_ORIGINS
     allowed_origin_regex: str | None = None
     max_upload_mb: float = 10.0
-    # Tenancy: replace with the logged-in owner's business once login is added
+    # Owner login (Supabase Auth). Every data route needs a valid login unless this is false.
+    auth_required: bool = True
     default_business_id: str = DEFAULT_BUSINESS_ID
 
     @property
@@ -142,6 +146,7 @@ class Settings:
             allowed_origins=_origins("ALLOWED_ORIGINS"),
             allowed_origin_regex=_str("ALLOWED_ORIGIN_REGEX"),
             max_upload_mb=_float("MAX_UPLOAD_MB", 10.0),
+            auth_required=_bool("AUTH_REQUIRED", True),
             default_business_id=_str("DEFAULT_BUSINESS_ID") or DEFAULT_BUSINESS_ID,
         )
 
@@ -161,16 +166,23 @@ class AppServices:
     settings: Settings
     db: Database
     storage: SupabaseStorage | None  # None: photos are not kept; tests pass an in-memory stand-in
+    auth: SupabaseAuth | None  # owner login; tests pass a stand-in
     embedder: Embedder
     vision: InvoiceVisionReader
     sku_matcher: SkuMatcher
 
     def business_id_for(self, request: Request) -> str:
-        """The business a request acts for.
+        """The business a request acts for: the one the logged-in owner belongs to.
 
-        Single-shop prototype: the configured DEFAULT_BUSINESS_ID. When owner login is added,
-        resolve it from the owner's access token here; every query already takes it as input.
+        ``api.auth.require_owner`` (run before every data route) checks the login token and stores
+        the business on the request. Every query takes it as input, so a login only ever reads its
+        own shop's rows.
         """
+        business_id = getattr(request.state, "business_id", None)
+        if business_id:
+            return business_id
+        if self.settings.auth_required:
+            raise WorkflowError(401, "not_logged_in", "Log in to see this.")
         return self.settings.default_business_id
 
     async def aclose(self) -> None:
@@ -178,6 +190,8 @@ class AppServices:
         await self.db.close()
         if self.storage is not None:
             await self.storage.aclose()
+        if self.auth is not None:
+            await self.auth.aclose()
         close = getattr(self.embedder, "aclose", None)
         if close is not None:
             await close()
@@ -188,12 +202,13 @@ async def build_services(
     *,
     db: Database | None = None,
     storage: Any = None,
+    auth: Any = None,
     embedder: Embedder | None = None,
     vision_model: str | Model | None = None,
     sku_model: str | Model | None = None,
 ) -> AppServices:
-    """Connect to Supabase and create both agents. Tests pass a database, fake storage, an
-    offline embedder and scripted models instead of the real OpenAI ones."""
+    """Connect to Supabase and create both agents. Tests pass a database, fake storage and login,
+    an offline embedder and scripted models instead of the real OpenAI ones."""
     if settings.openai_api_key:
         set_default_openai_key(settings.openai_api_key)
     if db is None:
@@ -208,6 +223,14 @@ async def build_services(
         assert settings.supabase_url and settings.supabase_service_role_key
         storage = SupabaseStorage(url=settings.supabase_url, service_key=settings.supabase_service_role_key,
                                   bucket=settings.invoice_bucket)
+    if auth is None and settings.storage_configured:
+        assert settings.supabase_url and settings.supabase_service_role_key
+        auth = SupabaseAuth(url=settings.supabase_url, api_key=settings.supabase_service_role_key)
+    if auth is None and settings.auth_required:
+        raise RuntimeError(
+            "Owner login needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (the shop's Supabase project). "
+            "Set them, or AUTH_REQUIRED=false for local tests only."
+        )
     if embedder is None:
         embedder = OpenAIEmbedder(model=settings.embedding_model, dimensions=settings.embedding_dimensions,
                                   api_key=settings.openai_api_key)
@@ -219,7 +242,7 @@ async def build_services(
         threshold=settings.sku_match_threshold, candidate_limit=settings.sku_candidate_count,
         api_key_configured=key_configured, trace_sensitive_data=settings.trace_sensitive_data,
     )
-    return AppServices(settings=settings, db=db, storage=storage, embedder=embedder, vision=vision,
+    return AppServices(settings=settings, db=db, storage=storage, auth=auth, embedder=embedder, vision=vision,
                        sku_matcher=sku_matcher)
 
 
@@ -253,6 +276,7 @@ def create_app(settings: Settings | None = None, services_factory: ServicesFacto
         allow_credentials=True,
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
+        expose_headers=["X-Total-Count"],  # the invoice list's total, for its page buttons
     )
 
     @app.exception_handler(RepositoryError)
@@ -271,11 +295,14 @@ def create_app(settings: Settings | None = None, services_factory: ServicesFacto
         """Liveness check: is the API up, and which parts are configured."""
         services: AppServices = request.app.state.services
         return {"ok": True, "database": "postgres", "openai_configured": bool(settings.openai_api_key),
-                "image_storage": services.storage is not None}
+                "image_storage": services.storage is not None, "login_required": settings.auth_required}
 
-    app.include_router(dashboard_router)
-    app.include_router(invoices_router)
-    app.include_router(suppliers_router)
+    app.include_router(auth_router)
+    login = [Depends(require_owner)]  # every data route needs a valid login
+    app.include_router(dashboard_router, dependencies=login)
+    app.include_router(invoices_router, dependencies=login)
+    app.include_router(suppliers_router, dependencies=login)
+    app.include_router(payments_router, dependencies=login)
     return app
 
 

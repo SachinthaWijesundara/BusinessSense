@@ -4,6 +4,8 @@ Deterministic rules (plain Python, no LLM; the proposal's "Python business rules
   * ``math_audit``: qty x rate - discount = line total, and lines - special discount + tax = total,
     within Rs 1. Money is computed with Decimal so float noise can never flip a result.
   * date checks and due dates (invoice date + the supplier's credit days).
+  * an invoice's payment status from its recorded supplier payments (paid once the owner's
+    confirmed payments cover the total; "unconfirmed" while a payment waits for confirmation).
 
 Owner workflow (proposal Figure 6: PendingFix, HumanConfirm and verification):
   * type in an invoice, fix an invoice, confirm a product, verify, reject, mark paid / unpaid.
@@ -34,6 +36,8 @@ from database.client import (
     NewInvoiceLine,
     NewProduct,
     NotFoundError,
+    PaymentRecord,
+    PaymentStatus,
     ProductRecord,
     UUIDStr,
 )
@@ -231,6 +235,28 @@ def compute_due_date(invoice_date: date | None, *, payment_type: str | None = No
     if credit_days is None:
         return None
     return invoice_date + timedelta(days=credit_days)
+
+
+def invoice_payment_status(total: float | None, current: PaymentStatus, payments: list[PaymentRecord],
+                           tolerance: float = DEFAULT_TOLERANCE) -> PaymentStatus:
+    """An invoice's payment status from the supplier payments recorded against it.
+
+    * paid         the owner's confirmed payments cover the total (within ``tolerance``)
+    * unconfirmed  otherwise, while any payment still waits for the owner's confirmation
+    * unpaid       otherwise
+    Rejected payments do not count. With no payment left, an invoice the owner marked paid by hand
+    stays paid; one that was only waiting for a confirmation goes back to unpaid.
+    """
+    live = [payment for payment in payments if payment.status != "rejected"]
+    if not live:
+        return "unpaid" if current == "unconfirmed" else current
+    confirmed = sum((_dec(p.amount) or Decimal("0") for p in live if p.status == "confirmed"), Decimal("0"))
+    invoice_total = _dec(total)
+    if invoice_total is not None and confirmed >= invoice_total - Decimal(str(tolerance)):
+        return "paid"
+    if any(payment.status == "unconfirmed" for payment in live):
+        return "unconfirmed"
+    return "unpaid"
 
 
 def invoice_missing_fields(invoice: NewInvoice, *, has_lines: bool) -> list[str]:
@@ -618,7 +644,8 @@ async def verify_invoice(services: AppServices, business_id: str, invoice_id: st
     )
     await db.log_event(business_id, invoice_id, "invoice_verified",
                        {"due_date": due_date.isoformat() if due_date else None, "credit_days": credit_days})
-    return updated
+    # The verified total may differ from the one payments were recorded against.
+    return await refresh_invoice_payment_status(services, business_id, invoice_id) or updated
 
 
 async def reject_invoice(services: AppServices, business_id: str, invoice_id: str, body: RejectRequest) -> Invoice:
@@ -629,6 +656,25 @@ async def reject_invoice(services: AppServices, business_id: str, invoice_id: st
     updated = await services.db.update_invoice(business_id, invoice_id, {"status": "rejected"})
     await services.db.log_event(business_id, invoice_id, "invoice_rejected",
                                 {"reason": body.reason, "previous_status": invoice.status})
+    return updated
+
+
+async def refresh_invoice_payment_status(services: AppServices, business_id: str, invoice_id: str | None) -> Invoice | None:
+    """Re-work out an invoice's payment status after a payment against it changed (logged when it
+    changes). Returns the invoice, or None when there is no such invoice."""
+    if not invoice_id:
+        return None
+    invoice = await services.db.get_invoice(business_id, invoice_id)
+    if invoice is None:
+        return None
+    payments = await services.db.list_payments(business_id, invoice_id=invoice_id)
+    status = invoice_payment_status(invoice.total, invoice.payment_status, payments, services.settings.math_tolerance)
+    if status == invoice.payment_status:
+        return invoice
+    updated = await services.db.update_invoice(business_id, invoice_id, {"payment_status": status})
+    await services.db.log_event(business_id, invoice_id, "payment_status_updated",
+                                {"payment_status": status, "previous": invoice.payment_status,
+                                 "amount_paid": updated.amount_paid})
     return updated
 
 

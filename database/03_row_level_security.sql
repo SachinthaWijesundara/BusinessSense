@@ -15,10 +15,13 @@ stable
 security definer
 set search_path = public
 as $$
+  select business_id from business_users where user_id = auth.uid()
+  union
   select id from businesses where owner_user_id = auth.uid();
 $$;
 
 alter table businesses enable row level security;
+alter table business_users enable row level security;
 alter table suppliers enable row level security;
 alter table products enable row level security;
 alter table product_aliases enable row level security;
@@ -33,7 +36,11 @@ alter table audit_log enable row level security;
 
 drop policy if exists businesses_owner_read on businesses;
 create policy businesses_owner_read on businesses
-  for select to authenticated using (owner_user_id = auth.uid());
+  for select to authenticated using (id in (select public.current_business_ids()));
+
+drop policy if exists business_users_self_read on business_users;
+create policy business_users_self_read on business_users
+  for select to authenticated using (user_id = auth.uid());
 
 do $$
 declare

@@ -1,15 +1,17 @@
 "use client";
 
 /**
- * Photo drop zone for the Invoice Manager. Sends the photo to the backend (POST /invoices/upload),
- * which reads it with InvoiceVisionAgent, audits the math, matches products and saves a draft.
- * On success the owner is taken to that draft's review screen.
+ * Photo drop zone for invoices and payment receipts (Invoice Manager and Supplier Profile). Sends
+ * the photo to the backend (POST /invoices/upload), which reads it with InvoiceVisionAgent.
+ * An invoice is audited, matched and saved as a draft, and its review screen opens. A receipt is
+ * saved as unconfirmed supplier payments, which the owner checks and confirms on Supplier Profile.
  */
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState, type DragEvent } from "react";
-import { ApiError, errorMessage, uploadInvoice } from "@/lib/api";
+import { ApiError, errorMessage, isReceipt, uploadInvoice } from "@/lib/api";
+import type { ReceiptUpload } from "@/lib/types";
 
 const ACCEPT = "image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp";
 
@@ -27,10 +29,12 @@ function describeProblem(error: unknown): UploadProblem {
   switch (error.errorType) {
     case "duplicate_invoice":
       return { title: "Already saved", text: error.message, existingInvoiceId: error.invoiceId };
+    case "duplicate_receipt":
+      return { title: "Already saved", text: `${error.message} Its payments are on Supplier Profile.` };
     case "reading_unsuccessful":
       return {
         title: "Could not read this photo",
-        text: "Retake the photo (flat, well lit, whole page), or type the invoice in by hand.",
+        text: "Retake the photo (flat, well lit, whole page), or type the invoice or payment in by hand.",
         missingFields: error.missingFields,
       };
     case "network_error":
@@ -41,26 +45,41 @@ function describeProblem(error: unknown): UploadProblem {
   }
 }
 
+type Props = {
+  className?: string;
+  /** The supplier the photo is from (uploading on that supplier's profile). */
+  supplierId?: string;
+  /** Called after a receipt is saved; without it the owner is taken to Supplier Profile. */
+  onReceiptSaved?: (receipt: ReceiptUpload) => void;
+};
+
 /** The drop zone, its progress spinner and any upload error. */
-export function DocumentUpload({ className = "" }: { className?: string }) {
+export function DocumentUpload({ className = "", supplierId, onReceiptSaved }: Props) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [problem, setProblem] = useState<UploadProblem | null>(null);
 
-  /** Send one photo to the backend and open the saved draft. */
+  /** Send one photo to the backend and open what was saved. */
   async function send(file: File | null) {
     if (!file) return;
     if (!file.type.startsWith("image/")) {
-      setProblem({ title: "Not a photo", text: "Choose a JPEG, PNG or WebP image of the invoice." });
+      setProblem({ title: "Not a photo", text: "Choose a JPEG, PNG or WebP image of the invoice or receipt." });
       return;
     }
     setUploading(true);
     setProblem(null);
     try {
-      const invoice = await uploadInvoice(file);
-      router.push(`/invoice-manager/${invoice.id}`);
+      const saved = await uploadInvoice(file, supplierId);
+      if (!isReceipt(saved)) {
+        router.push(`/invoice-manager/${saved.id}`);
+      } else if (onReceiptSaved) {
+        onReceiptSaved(saved);
+        setUploading(false);
+      } else {
+        router.push(saved.supplier_id ? `/supplier-profile?supplier=${saved.supplier_id}` : "/supplier-profile");
+      }
     } catch (error) {
       setProblem(describeProblem(error));
       setUploading(false);
@@ -119,16 +138,17 @@ export function DocumentUpload({ className = "" }: { className?: string }) {
         {uploading ? (
           <div className="flex flex-col items-center gap-3 py-2">
             <span className="extract-spinner" aria-hidden />
-            <p className="text-sm font-medium text-[var(--brand-deep)]">Reading the invoice…</p>
+            <p className="text-sm font-medium text-[var(--brand-deep)]">Reading the photo…</p>
             <p className="text-xs text-[var(--muted)]">
-              The backend is reading the photo, checking the math and matching products.
+              The backend is reading the photo, checking the math and matching products or invoices.
             </p>
           </div>
         ) : (
           <div className="text-center">
-            <p className="text-sm font-semibold text-[var(--brand-deep)]">Drop an invoice photo here</p>
+            <p className="text-sm font-semibold text-[var(--brand-deep)]">Drop an invoice or receipt photo here</p>
             <p className="mt-1 text-xs text-[var(--muted)]">
-              or click to choose one (JPEG, PNG or WebP). It is saved as a draft for you to review.
+              or click to choose one (JPEG, PNG or WebP). An invoice is saved as a draft for you to review; a payment
+              receipt is saved as payments waiting for your confirmation.
             </p>
           </div>
         )}

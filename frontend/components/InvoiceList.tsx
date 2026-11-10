@@ -2,20 +2,81 @@
 
 /**
  * Invoice Manager list: the photo upload, search filters, and the matching invoices from the
- * backend (GET /invoices). Each row opens that invoice's review screen.
+ * backend (GET /invoices), 100 to a page with Previous / page numbers / Next below the table.
+ * Each row opens that invoice's review screen.
  * A ?status=draft (or verified/rejected) in the address pre-selects the status filter.
  */
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { DocumentUpload } from "@/components/DocumentUpload";
-import { errorMessage, listInvoices, listSuppliers } from "@/lib/api";
+import { errorMessage, listInvoicePage, listSuppliers } from "@/lib/api";
 import { money } from "@/lib/money";
 import type { InvoiceQuery, InvoiceStatus, InvoiceSummary, PaymentStatus, Supplier } from "@/lib/types";
 
 const STATUSES: InvoiceStatus[] = ["draft", "verified", "rejected"];
 const PAYMENT_STATUSES: PaymentStatus[] = ["unpaid", "paid", "unconfirmed"];
+const PAGE_SIZE = 100;
+
+/** The page numbers to show: the first, the last, and two either side of the current one. */
+function pageNumbers(current: number, count: number): (number | "gap")[] {
+  const wanted = new Set([0, count - 1, current - 2, current - 1, current, current + 1, current + 2]);
+  const pages = [...wanted].filter((page) => page >= 0 && page < count).sort((a, b) => a - b);
+  const out: (number | "gap")[] = [];
+  pages.forEach((page, index) => {
+    if (index > 0 && page - pages[index - 1] > 1) out.push("gap");
+    out.push(page);
+  });
+  return out;
+}
+
+/** "Showing 101–200 of 880" with Previous, page numbers and Next. */
+function Pager({ offset, total, onPage }: { offset: number; total: number; onPage: (offset: number) => void }) {
+  const count = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const current = Math.floor(offset / PAGE_SIZE);
+  const first = total === 0 ? 0 : offset + 1;
+  const last = Math.min(total, offset + PAGE_SIZE);
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] px-3 py-3 text-sm">
+      <p className="text-[var(--muted)]">
+        Showing {first}–{last} of {total} invoice{total === 1 ? "" : "s"}
+      </p>
+      {count > 1 ? (
+        <nav className="flex flex-wrap items-center gap-1" aria-label="Invoice pages">
+          <button type="button" className="btn btn-secondary" disabled={current === 0} onClick={() => onPage(offset - PAGE_SIZE)}>
+            Previous
+          </button>
+          {pageNumbers(current, count).map((page, index) =>
+            page === "gap" ? (
+              <span key={`gap-${index}`} className="px-1 text-[var(--muted)]">
+                …
+              </span>
+            ) : (
+              <button
+                key={page}
+                type="button"
+                className={`btn ${page === current ? "btn-primary" : "btn-secondary"}`}
+                aria-current={page === current ? "page" : undefined}
+                onClick={() => onPage(page * PAGE_SIZE)}
+              >
+                {page + 1}
+              </button>
+            ),
+          )}
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={current >= count - 1}
+            onClick={() => onPage(offset + PAGE_SIZE)}
+          >
+            Next
+          </button>
+        </nav>
+      ) : null}
+    </div>
+  );
+}
 
 /** The status filter given in the address, if it is a valid one. */
 function statusFrom(value: string | null): InvoiceStatus | undefined {
@@ -40,10 +101,15 @@ export function InvoiceList() {
     date_from: "",
     date_to: "",
   });
-  const [query, setQuery] = useState<InvoiceQuery>(() => ({ status: statusFrom(searchParams.get("status")) }));
-  const [result, setResult] = useState<{ query: InvoiceQuery; rows: InvoiceSummary[]; error: string } | null>(
+  const [query, setQuery] = useState<InvoiceQuery>(() => ({
+    status: statusFrom(searchParams.get("status")),
+    limit: PAGE_SIZE,
+    offset: 0,
+  }));
+  const [result, setResult] = useState<{ query: InvoiceQuery; rows: InvoiceSummary[]; total: number; error: string } | null>(
     null,
   );
+  const tableTop = useRef<HTMLDivElement>(null);
 
   // Load the supplier names for the filter once.
   useEffect(() => {
@@ -52,15 +118,15 @@ export function InvoiceList() {
       .catch(() => setSuppliers([]));
   }, []);
 
-  // Ask the backend for the invoices whenever the search changes.
+  // Ask the backend for this page of invoices whenever the search or the page changes.
   useEffect(() => {
     let cancelled = false;
-    listInvoices(query)
-      .then((rows) => {
-        if (!cancelled) setResult({ query, rows, error: "" });
+    listInvoicePage(query)
+      .then(({ rows, total }) => {
+        if (!cancelled) setResult({ query, rows, total, error: "" });
       })
       .catch((error) => {
-        if (!cancelled) setResult({ query, rows: [], error: errorMessage(error) });
+        if (!cancelled) setResult({ query, rows: [], total: 0, error: errorMessage(error) });
       });
     return () => {
       cancelled = true;
@@ -70,10 +136,18 @@ export function InvoiceList() {
   const loading = result?.query !== query;
   const rows = result?.rows ?? [];
 
-  /** Turn the filter boxes into a search. */
+  /** Open another page of the results and bring the table into view. */
+  function goToPage(offset: number) {
+    setQuery({ ...query, offset: Math.max(0, offset) });
+    tableTop.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  /** Turn the filter boxes into a search (starting again at the first page). */
   function search(event: FormEvent) {
     event.preventDefault();
     setQuery({
+      limit: PAGE_SIZE,
+      offset: 0,
       supplier_id: filters.supplier_id || undefined,
       status: (filters.status || undefined) as InvoiceStatus | undefined,
       payment_status: (filters.payment_status || undefined) as PaymentStatus | undefined,
@@ -166,7 +240,8 @@ export function InvoiceList() {
 
       {result?.error ? <p className="banner-error mb-4">{result.error}</p> : null}
 
-      <div className="bs-card overflow-x-auto !p-0">
+      <div ref={tableTop} className="bs-card scroll-mt-4 !p-0">
+        <div className="overflow-x-auto">
         <table className="entry-table">
           <thead>
             <tr>
@@ -229,6 +304,10 @@ export function InvoiceList() {
             )}
           </tbody>
         </table>
+        </div>
+        {result && !result.error ? (
+          <Pager offset={query.offset ?? 0} total={result.total} onPage={goToPage} />
+        ) : null}
       </div>
     </div>
   );

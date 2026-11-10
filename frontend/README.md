@@ -25,22 +25,25 @@ Open http://localhost:3001. The backend must be running (default http://localhos
 |---|---|
 | `app/layout.tsx` | Root layout: font, global styles, sidebar shell around every screen |
 | `app/globals.css` | Colours, layout, cards, forms, tables, badges |
-| `app/page.tsx` | **Dashboard**: review queue, payments due, monthly purchases, supplier spend, forecast slot (`GET /dashboard`) |
+| `app/login/page.tsx` | **Login**: email and password, sent to the backend (`POST /auth/login`); no sign-up |
+| `app/page.tsx` | **Dashboard**: review queue, payments due, payments to confirm and 2-day reminders, monthly purchases, supplier spend, forecast slot (`GET /dashboard`) |
 | `app/invoice-manager/page.tsx` | **Invoice Manager**: photo upload, search, invoice list |
 | `app/invoice-manager/new/page.tsx` | Type in an invoice by hand (`GET /suppliers`, `POST /invoices`) |
 | `app/invoice-manager/[invoiceId]/page.tsx` | Review screen for one invoice |
-| `app/supplier-profile/page.tsx` | **Supplier Profile**: suppliers, credit days, totals, invoices, items (`/suppliers...`) |
+| `app/supplier-profile/page.tsx` | **Supplier Profile**: suppliers, credit days, totals, invoices, payments, items; payments waiting for confirmation (`/suppliers...`, `/payments`) |
 | `app/purchase-analytics/page.tsx` | **Purchase Analytics**: placeholder until Model 1 exists in the backend |
 | `app/cash-planner/page.tsx` | **Purchasing Cash Planner**: placeholder until Model 2 exists in the backend |
-| `components/AppShell.tsx` | Sidebar navigation |
-| `components/DocumentUpload.tsx` | Photo drop zone (`POST /invoices/upload`) |
+| `components/AppShell.tsx` | Sidebar navigation, the logged-in shop and Log out; opens the login page when logged out |
+| `components/DocumentUpload.tsx` | Photo drop zone for invoices and payment receipts (`POST /invoices/upload`) |
 | `components/InvoiceList.tsx` | Filters and invoice table (`GET /invoices`) |
 | `components/InvoiceForm.tsx` | Editable invoice header and lines, values typed as printed |
 | `components/InvoiceReview.tsx` | Photo beside the fields, audit result, supplier, product matching, verify / reject / paid (`/invoices/{id}...`, `/products`) |
 | `components/SupplierForm.tsx` | Add-supplier form (`POST /suppliers`) |
+| `components/PaymentForm.tsx` | Record a payment or correct one read from a receipt (`POST /payments`, `/payments/{id}/fix`) |
+| `components/PaymentList.tsx` | Payments table: check, confirm, reject (`/payments/{id}/confirm`, `/payments/{id}/reject`) |
 | `components/ItemAutocomplete.tsx` | Product picker over the catalogue |
 | `components/EmptyScreen.tsx` | Placeholder for screens that wait for the backend's models |
-| `lib/api.ts` | The only file that sends requests: one function per backend endpoint |
+| `lib/api.ts` | The only file that sends requests: one function per backend endpoint, plus the login session (token on every request, renewed before it expires) |
 | `lib/types.ts` | Shapes of the backend's JSON |
 | `lib/money.ts` | Number display and input parsing (no business maths) |
 | `package.json`, `package-lock.json` | Libraries and the `dev` / `build` / `lint` commands |

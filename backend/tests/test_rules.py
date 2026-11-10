@@ -3,18 +3,18 @@ guardrail's field lists, settings, cash flow, purchase analysis and the dashboar
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 
 from agentic.guardrails import blocking_fields, missing_fields
 from agentic.schemas import ExtractedDocument, InvoiceDraft, InvoiceLineDraft
 from api.dashboard import build_dashboard
-from database.client import InvoiceSummary
+from database.client import InvoiceSummary, PaymentRecord
 from main import DEFAULT_BUSINESS_ID, Settings
 from services.alias_service import normalize_text
-from services.invoice_service import compute_due_date, date_issues, math_audit, parse_iso_date
-from services.cash_flow_service import payments_due, supplier_totals
+from services.invoice_service import compute_due_date, date_issues, invoice_payment_status, math_audit, parse_iso_date
+from services.cash_flow_service import confirm_blockers, payments_due, reminders, still_owed, supplier_totals
 from services.purchase_analysis_service import last_months, monthly_purchases, supplier_spend
 from tests.conftest import invoice_doc, invoice_line, receipt_doc
 
@@ -206,3 +206,60 @@ def test_purchase_analysis_and_payments_due_directly():
     due = [summary(id="a", due_date=date(2026, 3, 20)), summary(id="b", due_date=date(2026, 3, 1))]
     assert [p.invoice_id for p in payments_due(due, today=date(2026, 2, 28), window_days=30)] == ["b", "a"]
     assert payments_due(due, today=date(2026, 2, 28), window_days=0) == []
+
+
+# ---- supplier payments ---------------------------------------------------------------------------
+def pay(amount: float | None = 500.0, status: str = "confirmed", **extra) -> PaymentRecord:
+    """A saved supplier payment."""
+    fields = {"id": extra.pop("id", "p1"), "business_id": DEFAULT_BUSINESS_ID, "supplier_id": "s1",
+              "amount": amount, "paid_on": date(2026, 10, 25), "status": status, **extra}
+    return PaymentRecord.model_validate(fields)
+
+
+def test_invoice_payment_status_from_payments():
+    """Paid once confirmed payments cover the total; unconfirmed while one waits; rejected ones never count."""
+    assert invoice_payment_status(900.0, "unpaid", [pay(900.0)]) == "paid"
+    assert invoice_payment_status(900.0, "unpaid", [pay(400.0), pay(499.5)]) == "paid"  # within Rs 1
+    assert invoice_payment_status(900.0, "unpaid", [pay(400.0)]) == "unpaid"  # part paid
+    assert invoice_payment_status(900.0, "unpaid", [pay(400.0), pay(500.0, "unconfirmed")]) == "unconfirmed"
+    assert invoice_payment_status(900.0, "paid", [pay(400.0)]) == "unpaid"  # the records decide
+    assert invoice_payment_status(900.0, "unconfirmed", [pay(900.0, "rejected")]) == "unpaid"
+    assert invoice_payment_status(900.0, "paid", []) == "paid"  # marked paid by hand, nothing recorded
+    assert invoice_payment_status(None, "unpaid", [pay(900.0)]) == "unpaid"
+
+
+def test_confirm_blockers():
+    """A confirmed payment needs a supplier, amount and date, a verified invoice, and no overpayment."""
+    today = date(2026, 11, 1)
+    verified = InvoiceSummary(id="i1", business_id=DEFAULT_BUSINESS_ID, invoice_number="T-1", total=900.0,
+                              status="verified", supplier_id="s1")
+    assert confirm_blockers(pay(900.0, "unconfirmed"), verified, 0.0, tolerance=1.0, today=today) == []
+    assert confirm_blockers(pay(901.0, "unconfirmed"), verified, 0.0, tolerance=1.0, today=today) == []
+    [over] = confirm_blockers(pay(600.0, "unconfirmed"), verified, 400.0, tolerance=1.0, today=today)
+    assert over == "Rs 600.00 is more than the Rs 500.00 still owed on invoice T-1."
+    draft = verified.model_copy(update={"status": "draft"})
+    assert confirm_blockers(pay(100.0, "unconfirmed"), draft, 0.0, tolerance=1.0, today=today) == ["Verify invoice T-1 first."]
+    empty = pay(None, "unconfirmed", supplier_id=None, paid_on=None)
+    assert confirm_blockers(empty, None, 0.0, tolerance=1.0, today=today) == [
+        "Pick the supplier.", "Enter the amount paid.", "Enter the payment date."]
+    future = pay(100.0, "unconfirmed", paid_on=date(2026, 12, 1))
+    assert confirm_blockers(future, None, 0.0, tolerance=1.0, today=today) == ["The payment date 2026-12-01 is in the future."]
+    unknown = pay(100.0, "unconfirmed", invoice_number_raw="T-9")
+    assert "T-9" in confirm_blockers(unknown, None, 0.0, tolerance=1.0, today=today)[0]
+    assert confirm_blockers(pay(100.0, "unconfirmed"), None, 0.0, tolerance=1.0, today=today) == []  # not for an invoice
+    assert "rejected" in confirm_blockers(pay(100.0, "rejected"), None, 0.0, tolerance=1.0, today=today)[0]
+
+
+def test_supplier_totals_with_payments_and_reminders():
+    """Outstanding subtracts confirmed payments; unconfirmed ones are counted apart; old ones get a reminder."""
+    owed = InvoiceSummary(id="i1", business_id="b", status="verified", total=1000.0, amount_paid=400.0,
+                          payment_status="unpaid", due_date=date(2026, 11, 5))
+    assert still_owed(owed) == 600.0 and still_owed(owed.model_copy(update={"amount_paid": 1500.0})) == 0.0
+    payments = [pay(400.0), pay(250.0, "unconfirmed", id="p2"), pay(99.0, "rejected", id="p3")]
+    totals = supplier_totals([owed], payments)
+    assert (totals.outstanding, totals.paid_total, totals.unconfirmed_total, totals.unconfirmed_count) == (600.0, 400.0, 250.0, 1)
+    [due] = payments_due([owed], today=date(2026, 11, 1))
+    assert (due.total, due.amount_paid, due.still_owed, due.days_left) == (1000.0, 400.0, 600.0, 4)
+    old = pay(10.0, "unconfirmed", id="old", reminder_due=True, created_at=datetime(2026, 10, 1, tzinfo=timezone.utc))
+    older = pay(10.0, "unconfirmed", id="older", reminder_due=True, created_at=datetime(2026, 9, 1, tzinfo=timezone.utc))
+    assert [p.id for p in reminders([pay(10.0, "unconfirmed"), old, older])] == ["older", "old"]
