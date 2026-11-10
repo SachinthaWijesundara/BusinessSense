@@ -32,7 +32,7 @@ Open http://localhost:3001. The backend must be running (default http://localhos
 | `app/invoice-manager/[invoiceId]/page.tsx` | Review screen for one invoice |
 | `app/supplier-profile/page.tsx` | **Supplier Profile**: suppliers, credit days, totals, invoices, payments, items; payments waiting for confirmation (`/suppliers...`, `/payments`) |
 | `app/purchase-analytics/page.tsx` | **Purchase Analytics**: each product's prices over time with Model 1's expected range, prices to check, spend by month and supplier (`/analytics/overview`, `/analytics/products/{id}`) |
-| `app/cash-planner/page.tsx` | **Purchasing Cash Planner**: placeholder until Model 2 exists in the backend |
+| `app/cash-planner/page.tsx` | **Purchasing Cash Planner**: bills falling due by date, Model 2's expected purchases beside the baseline, and the cash to set aside for 14/30/60/90 days (`/analytics/cash-plan`) |
 | `components/AppShell.tsx` | Sidebar navigation, the logged-in shop and Log out; opens the login page when logged out |
 | `components/DocumentUpload.tsx` | Photo drop zone for invoices and payment receipts (`POST /invoices/upload`) |
 | `components/InvoiceList.tsx` | Filters and invoice table (`GET /invoices`) |
@@ -43,7 +43,6 @@ Open http://localhost:3001. The backend must be running (default http://localhos
 | `components/PaymentList.tsx` | Payments table: check, confirm, reject (`/payments/{id}/confirm`, `/payments/{id}/reject`) |
 | `components/PriceChart.tsx` | A product's unit prices over time with the expected range and the next expected price (plain SVG) |
 | `components/ItemAutocomplete.tsx` | Product picker over the catalogue |
-| `components/EmptyScreen.tsx` | Placeholder for screens that wait for the backend's models (Cash Planner) |
 | `lib/api.ts` | The only file that sends requests: one function per backend endpoint, plus the login session (token on every request, renewed before it expires) |
 | `lib/types.ts` | Shapes of the backend's JSON |
 | `lib/money.ts` | Number display and input parsing (no business maths) |

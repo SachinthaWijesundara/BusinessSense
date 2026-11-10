@@ -1,9 +1,11 @@
-"""Train Model 1, Item Price Intelligence, for one shop (proposal section 6).
+"""Train Model 1, Item Price Intelligence, for one shop (proposal section 6); the same command
+also trains Model 2, the purchase spend forecast (ml/spend.py).
 
 Run by the team on a laptop, never on the server (from backend/, with backend/.env pointing at
 the shop's Supabase project):
 
-    .venv\\Scripts\\python -m ml.train              # train, save, upload to the shop's Storage
+    .venv\\Scripts\\python -m ml.train              # train both models, save, upload to the shop's Storage
+    .venv\\Scripts\\python -m ml.train --model purchase_spend  # only Model 2
     .venv\\Scripts\\python -m ml.train --no-upload  # train and save locally only
 
 What it does:
@@ -295,19 +297,26 @@ def print_report(report: dict[str, Any]) -> None:
 
 
 async def _main(argv: list[str]) -> int:
-    """Command line: read the shop's purchases, train, save and upload."""
-    parser = argparse.ArgumentParser(description="Train Model 1 (item price) for one shop.")
+    """Command line: read the shop's purchases, train Model 1 and Model 2, save and upload."""
+    parser = argparse.ArgumentParser(description="Train Model 1 (item price) and Model 2 (purchase spend) for one shop.")
     parser.add_argument("--business-id", help="the shop (default: the only business in the database)")
+    parser.add_argument("--model", choices=("all", "item_price", "purchase_spend"), default="all",
+                        help="which model to train (default: both)")
     parser.add_argument("--no-upload", action="store_true", help="save locally only, do not upload to Supabase Storage")
-    parser.add_argument("--months", type=int, default=EVAL_MONTHS, help="how many recent months to test on")
+    parser.add_argument("--months", type=int, default=EVAL_MONTHS, help="how many recent months Model 1 is tested on")
     args = parser.parse_args(argv)
 
     from database.client import Database, SupabaseStorage
     from main import Settings
 
+    from . import spend
+
     settings = Settings.from_env()
     if not settings.database_url:
         print("DATABASE_URL is not set (backend/.env).", file=sys.stderr)
+        return 2
+    if not args.no_upload and not settings.storage_configured:
+        print("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set: use --no-upload or set them.", file=sys.stderr)
         return 2
     db = Database(settings.database_url, max_size=1)
     await db.open()
@@ -317,37 +326,48 @@ async def _main(argv: list[str]) -> int:
         if business_id is None or business_id not in businesses:
             print(f"Choose the shop with --business-id (found {len(businesses)}).", file=sys.stderr)
             return 2
-        lines = await db.purchase_lines(business_id)
+        lines = await db.purchase_lines(business_id) if args.model in ("all", "item_price") else []
+        invoices = await db.list_all_invoices(business_id) if args.model in ("all", "purchase_spend") else []
     finally:
         await db.close()
 
-    try:
-        artifact, report = train_item_price(lines, today=date.today(), business_id=business_id, months=args.months)
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    print_report(report)
+    trained: list[tuple[str, bytes, dict[str, Any]]] = []
+    status = 0
+    if args.model in ("all", "item_price"):
+        try:
+            artifact, report = train_item_price(lines, today=date.today(), business_id=business_id, months=args.months)
+            print_report(report)
+            trained.append(("item_price", to_bytes(artifact), report))
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            status = 1
+    if args.model in ("all", "purchase_spend"):
+        try:
+            artifact, report = spend.train_purchase_spend(invoices, today=date.today(), business_id=business_id)
+            spend.print_report(report)
+            trained.append(("purchase_spend", spend.to_bytes(artifact), report))
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            status = 1
 
     folder = OUTPUT_DIR / business_id
     folder.mkdir(parents=True, exist_ok=True)
-    data = to_bytes(artifact)
-    (folder / "item_price.joblib").write_bytes(data)
-    (folder / "item_price_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    for name, data, report in trained:
+        (folder / f"{name}.joblib").write_bytes(data)
+        (folder / f"{name}_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"  saved: {folder}")
 
-    if not args.no_upload:
-        if not settings.storage_configured:
-            print("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set: not uploaded.", file=sys.stderr)
-            return 1
+    if trained and not args.no_upload:
         assert settings.supabase_url and settings.supabase_service_role_key
         storage = SupabaseStorage(url=settings.supabase_url, service_key=settings.supabase_service_role_key, bucket="models")
         try:
-            await storage.put(f"{business_id}/item_price.joblib", data, "application/octet-stream")
-            await storage.put(f"{business_id}/item_price_report.json", json.dumps(report, indent=2).encode(), "application/json")
+            for name, data, report in trained:
+                await storage.put(f"{business_id}/{name}.joblib", data, "application/octet-stream")
+                await storage.put(f"{business_id}/{name}_report.json", json.dumps(report, indent=2).encode(), "application/json")
+                print(f"  uploaded to Supabase Storage: models/{business_id}/{name}.joblib")
         finally:
             await storage.aclose()
-        print(f"  uploaded to Supabase Storage: models/{business_id}/item_price.joblib")
-    return 0
+    return status
 
 
 if __name__ == "__main__":

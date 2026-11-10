@@ -38,7 +38,8 @@ services/                       business rules in plain Python (no LLM)
                                 from its payments, the owner's invoice workflow (type in, fix, confirm
                                 product, verify, reject, mark paid)
   cash_flow_service.py          payables: what is still owed, payments due, supplier totals; supplier
-                                payments (record, correct, confirm, reject) and their confirm rules
+                                payments (record, correct, confirm, reject) and their confirm rules;
+                                the Purchasing Cash Planner rules (bills due + new purchases due)
   purchase_analysis_service.py  monthly purchases, supplier spend, a supplier's verified item lines, and
                                 Purchase Analytics with Model 1 (each price judged from earlier ones)
   alias_service.py              product catalogue search (exact name, then embeddings in pgvector)
@@ -53,6 +54,8 @@ ml/                             the predictive models (proposal section 6), sepa
   train.py                      trains Model 1 for one shop on the team's laptop: baselines, learners,
                                 fair test in time order, saves and uploads the model (see "Model 1")
   inference.py                  uses a trained Model 1: expected price, range, and the price check
+  spend.py                      Model 2 (purchase spend): monthly spend, seasonal-naive and rolling-mean
+                                baselines, exponential smoothing and lagged regression, fair test, forecast
   output/                       (not in Git) the last trained model and its report, per shop
 
 tests/                          pytest suite (see "Tests")
@@ -107,6 +110,7 @@ order in the Supabase SQL editor).
 | GET | `/analytics/overview` | products with their next expected price, prices outside their range (last year), spend by month and supplier |
 | GET | `/analytics/products/{id}` | one product's unit prices over time with the expected range (keeps the next-purchase prediction in `model_predictions`) |
 | GET | `/analytics/invoices/{id}/price-check` | each line's unit price against its product's expected range |
+| GET | `/analytics/cash-plan?days=30` | Purchasing Cash Planner: bills due by date, Model 2's expected purchases, the cash to set aside (14/30/60/90 days) |
 | GET | `/payments` | filters: `supplier_id`, `invoice_id`, `status` (`unconfirmed`, `confirmed`, `rejected`) |
 | POST | `/payments` | a payment typed in by hand (unconfirmed; `confirm: true` saves and confirms it) |
 | GET | `/payments/{id}` | one payment, with a link to its receipt photo |
@@ -180,8 +184,18 @@ loads it on first use (restart the API after retraining). `--no-upload` saves lo
 when new invoices have been verified. Until a shop is trained, Purchase Analytics shows the median
 of recent prices as a baseline and checks nothing.
 
+## Model 2: Purchasing Expenditure Forecast
+
+Trained by the same command as Model 1 (`python -m ml.train`, or `--model purchase_spend` alone).
+It forecasts monthly purchase spend from verified invoices, compares the seasonal-naive (same month
+last year) and rolling-mean baselines with exponential smoothing and a regression on lagged spend
+in a rolling-origin test on the last 12 months (mean absolute error and weighted percentage error),
+and keeps a learner only if it beats both baselines. The cash-versus-credit split is estimated only
+when most recent invoices record cash or credit. The Cash Planner adds, by plain rules, the bills
+falling due in the period and the part of the expected purchases that falls due inside it (by the
+suppliers' credit days); unconfirmed payments are shown only as an assumed scenario.
+
 ## Not built yet
 
-Password reset
-emails, expenses, the Tesseract OCR baseline, Model 2 (spend forecast) and the cash planner
-projection.
+Password reset emails, expenses and the optional opening cash / inflows in the planner, and the
+Tesseract OCR baseline.

@@ -216,8 +216,23 @@ export type Dashboard = {
   payments_due: PaymentDue[];
   unconfirmed_payments: number;
   payment_reminders: SupplierPayment[];
-  forecast: null;
+  forecast: DashboardForecast | null;
   forecast_note: string;
+};
+
+/** The Dashboard's next-30-day purchasing forecast beside its baseline and the bills already due. */
+export type DashboardForecast = {
+  days: number;
+  expected: number;
+  low: number | null;
+  high: number | null;
+  method: string;
+  is_baseline: boolean;
+  baseline_name: string;
+  baseline: number;
+  bills_due: number;
+  reserve: number;
+  model_note: string;
 };
 
 /** One item line bought from a supplier (verified invoices only). */
@@ -523,4 +538,74 @@ export type LineCheck = {
   is_baseline: boolean;
   difference_pct: number | null;
   message: string;
+};
+
+// Purchasing Cash Planner (Model 2) ----------------------------------------------------------------
+
+/** Which Model 2 the shop has: a learner, a baseline, or not trained yet. */
+export type SpendModelInfo = {
+  trained: boolean;
+  version: string | null;
+  method: string | null;
+  learner_kept: boolean;
+  trained_at: string | null;
+  range_low_pct: number | null;
+  range_high_pct: number | null;
+  note: string;
+};
+
+/** Expected purchase spend for one month, with the baseline beside it. */
+export type MonthSpend = {
+  month: string;
+  expected: number;
+  low: number | null;
+  high: number | null;
+  method: string;
+  is_baseline: boolean;
+  baseline_name: string;
+  baseline: number;
+};
+
+/** A verified bill still owed, by its due date. */
+export type Obligation = {
+  due_date: string | null;
+  days_left: number | null;
+  supplier_id: string | null;
+  supplier_name: string | null;
+  invoice_id: string;
+  invoice_number: string | null;
+  still_owed: number;
+  unconfirmed_paid: number;
+};
+
+/** Reply of GET /analytics/cash-plan. */
+export type CashPlan = {
+  today: string;
+  days: number;
+  period_end: string;
+  model: SpendModelInfo;
+  months: MonthSpend[];
+  period_spend: {
+    expected: number;
+    low: number | null;
+    high: number | null;
+    baseline: number;
+    baseline_name: string;
+    method: string;
+    is_baseline: boolean;
+    spent_so_far_this_month: number;
+  };
+  obligations: Obligation[];
+  due_by_day: { day: string; amount: number; cumulative: number }[];
+  no_due_date: Obligation[];
+  bills_due: number;
+  overdue: number;
+  new_purchases_due: { expected: number; high: number | null; baseline: number; share_due_pct: number; note: string };
+  reserve: number;
+  reserve_high: number | null;
+  reserve_baseline: number;
+  unconfirmed_total: number;
+  reserve_if_unconfirmed_are_paid: number;
+  cash_credit_split: { available: boolean; note: string; cash_share_pct?: number };
+  notes: string[];
 };

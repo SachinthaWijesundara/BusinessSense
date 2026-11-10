@@ -40,6 +40,7 @@ from api.suppliers import payments_router
 from api.suppliers import router as suppliers_router
 from database.client import Database, RepositoryError, SupabaseAuth, SupabaseStorage
 from ml.inference import ItemPriceModel
+from ml.spend import SpendForecastModel
 from services.alias_service import Embedder, OpenAIEmbedder
 from services.invoice_service import WorkflowError
 
@@ -175,6 +176,7 @@ class AppServices:
     sku_matcher: SkuMatcher
     models_storage: Any = None  # the shop's private "models" bucket (trained Model 1); None: not configured
     _price_models: dict[str, ItemPriceModel | None] = field(default_factory=dict)
+    _spend_models: dict[str, SpendForecastModel | None] = field(default_factory=dict)
 
     def business_id_for(self, request: Request) -> str:
         """The business a request acts for: the one the logged-in owner belongs to.
@@ -205,6 +207,19 @@ class AppServices:
                 logger.exception("could not load Model 1")
                 return None
         return self._price_models[business_id]
+
+    async def spend_model(self, business_id: str) -> SpendForecastModel | None:
+        """The shop's trained Model 2 (purchase spend), loaded like Model 1 on first use and kept in
+        memory; None until ml/train.py has been run for the shop (the planner then shows baselines)."""
+        if business_id not in self._spend_models:
+            if self.models_storage is None:
+                return None
+            try:
+                self._spend_models[business_id] = await SpendForecastModel.from_storage(self.models_storage, business_id)
+            except Exception:  # noqa: BLE001 - without its model the shop still sees baselines
+                logger.exception("could not load Model 2")
+                return None
+        return self._spend_models[business_id]
 
     async def aclose(self) -> None:
         """Close the database pool and HTTP clients when the API stops."""

@@ -207,7 +207,7 @@ def test_dashboard_combines_purchases_and_payments():
     assert (by_month["2026-10"], by_month["2026-09"], by_month["2026-11"]) == (1200.0, 50.0, 0.0)
     assert [(s.supplier_name, s.total) for s in dash.supplier_spend] == [("A", 1070.0), ("B", 250.0)]
     assert [(p.invoice_id, p.days_left) for p in dash.payments_due] == [("1", -7), ("2", 21)]
-    assert dash.forecast is None and "Model 2" in dash.forecast_note
+    assert dash.forecast is None and "next 30 days" in dash.forecast_note  # filled in by the route (Model 2)
 
 
 def test_purchase_analysis_and_payments_due_directly():

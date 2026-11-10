@@ -12,6 +12,7 @@
 
 import type {
   AnalyticsOverview,
+  CashPlan,
   AuditEvent,
   CashOverview,
   CashOverviewQuery,
@@ -475,4 +476,9 @@ export function getProductHistory(productId: string): Promise<ProductHistory> {
 /** GET /analytics/invoices/{id}/price-check: each line's unit price against its expected range. */
 export function getInvoicePriceCheck(invoiceId: string): Promise<LineCheck[]> {
   return request<LineCheck[]>(`/analytics/invoices/${invoiceId}/price-check`);
+}
+
+/** GET /analytics/cash-plan: the purchasing cash requirement for the next 14, 30, 60 or 90 days. */
+export function getCashPlan(days: number): Promise<CashPlan> {
+  return request<CashPlan>(`/analytics/cash-plan?days=${days}`);
 }
