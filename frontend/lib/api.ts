@@ -11,6 +11,7 @@
  */
 
 import type {
+  AnalyticsOverview,
   AuditEvent,
   ConfirmSku,
   Dashboard,
@@ -22,11 +23,13 @@ import type {
   InvoiceFix,
   InvoiceQuery,
   InvoiceSummary,
+  LineCheck,
   NewProduct,
   PaymentCreate,
   PaymentInput,
   PaymentQuery,
   Product,
+  ProductHistory,
   ReceiptUpload,
   Session,
   Supplier,
@@ -448,4 +451,21 @@ export function confirmPayment(paymentId: string): Promise<SupplierPayment> {
 /** POST /payments/{id}/reject: keep a wrong payment out of the ledger, with the owner's reason. */
 export function rejectPayment(paymentId: string, reason: string): Promise<SupplierPayment> {
   return postJson<SupplierPayment>(`/payments/${paymentId}/reject`, { reason });
+}
+
+// Purchase Analytics (Model 1) -------------------------------------------------------------------
+
+/** GET /analytics/overview: products with their expected next price, flagged prices, spend. */
+export function getAnalyticsOverview(): Promise<AnalyticsOverview> {
+  return request<AnalyticsOverview>("/analytics/overview");
+}
+
+/** GET /analytics/products/{id}: one product's prices over time with the expected range. */
+export function getProductHistory(productId: string): Promise<ProductHistory> {
+  return request<ProductHistory>(`/analytics/products/${productId}`);
+}
+
+/** GET /analytics/invoices/{id}/price-check: each line's unit price against its expected range. */
+export function getInvoicePriceCheck(invoiceId: string): Promise<LineCheck[]> {
+  return request<LineCheck[]>(`/analytics/invoices/${invoiceId}/price-check`);
 }

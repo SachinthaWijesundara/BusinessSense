@@ -350,3 +350,109 @@ export type Session = {
   email: string | null;
   business_name: string;
 };
+
+// Purchase Analytics (Model 1) -------------------------------------------------------------------
+
+/** Which Model 1 the shop has: a learner, a baseline, or not trained yet. */
+export type ModelInfo = {
+  trained: boolean;
+  version: string | null;
+  method: string | null;
+  learner_kept: boolean;
+  trained_at: string | null;
+  range_low_pct: number | null;
+  range_high_pct: number | null;
+  note: string;
+};
+
+/** Model 1's expected price (or a labelled baseline) with its range when there is one. */
+export type ExpectedPrice = {
+  expected: number | null;
+  low: number | null;
+  high: number | null;
+  method: string;
+  is_baseline: boolean;
+  earlier_purchases: number;
+  note: string;
+};
+
+/** How a unit price compares with its expected range. */
+export type PriceStatus = "inside" | "above" | "below" | "no_range";
+
+/** One past purchase of a product, judged from the purchases before it. */
+export type PricePoint = {
+  day: string;
+  invoice_id: string;
+  invoice_number: string | null;
+  supplier_name: string | null;
+  quantity: number;
+  unit_price: number;
+  expected: number | null;
+  low: number | null;
+  high: number | null;
+  status: PriceStatus;
+  difference_pct: number | null;
+};
+
+/** One product in the Purchase Analytics list. */
+export type ProductSummary = {
+  product_id: string;
+  product_name: string;
+  purchases: number;
+  first_bought: string;
+  last_bought: string;
+  last_price: number;
+  total_spend: number;
+  days_between: number | null;
+  next: ExpectedPrice;
+  last_status: PriceStatus;
+};
+
+/** A purchase whose unit price fell outside its expected range. */
+export type FlaggedPrice = {
+  product_id: string;
+  product_name: string;
+  day: string;
+  invoice_id: string;
+  invoice_number: string | null;
+  supplier_name: string | null;
+  unit_price: number;
+  expected: number;
+  low: number;
+  high: number;
+  status: "above" | "below";
+  difference_pct: number;
+  message: string;
+};
+
+/** Reply of GET /analytics/overview. */
+export type AnalyticsOverview = {
+  model: ModelInfo;
+  products: ProductSummary[];
+  flagged: FlaggedPrice[];
+  monthly_purchases: { month: string; total: number }[];
+  supplier_spend: { supplier_id: string; supplier_name: string; total: number }[];
+};
+
+/** Reply of GET /analytics/products/{id}. */
+export type ProductHistory = {
+  model: ModelInfo;
+  product: ProductSummary;
+  points: PricePoint[];
+  spend_by_month: { month: string; total: number }[];
+};
+
+/** One invoice line's price check (GET /analytics/invoices/{id}/price-check). */
+export type LineCheck = {
+  line_id: string;
+  item_name: string;
+  product_id: string | null;
+  unit_price: number | null;
+  expected: number | null;
+  low: number | null;
+  high: number | null;
+  status: PriceStatus | "no_product";
+  is_baseline: boolean;
+  difference_pct: number | null;
+  message: string;
+};

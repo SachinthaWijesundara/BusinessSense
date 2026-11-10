@@ -228,12 +228,30 @@ class PurchaseLine(BaseModel):
     """
 
     invoice_id: str
+    invoice_number: str | None = None
     invoice_date: date | None = None
     supplier_id: str | None = None
+    supplier_name: str | None = None
     product_id: str
     product_name: str
     quantity: float | None = None
     line_total: float | None = None
+
+
+class ModelPrediction(BaseModel):
+    """One prediction to keep (model_predictions), so it can later be compared with what happened."""
+
+    model_name: Literal["item_price", "purchase_spend"]
+    model_version: str
+    product_id: str | None = None
+    target_date: date | None = None
+    horizon: str | None = None
+    predicted_value: float | None = None
+    lower_bound: float | None = None
+    upper_bound: float | None = None
+    baseline_name: str | None = None
+    baseline_value: float | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class LineMatchUpdate(BaseModel):
@@ -957,9 +975,10 @@ class Database:
         model only learns from checked, product-linked purchases (proposal section 6).
         """
         sql = (
-            "select i.id as invoice_id, i.invoice_date, i.supplier_id, l.product_id, p.name as product_name, "
-            "l.quantity, l.line_total from invoice_items l join invoices i on i.id = l.invoice_id "
-            "join products p on p.id = l.product_id "
+            "select i.id as invoice_id, i.invoice_number, i.invoice_date, i.supplier_id, s.name as supplier_name, "
+            "l.product_id, p.name as product_name, l.quantity, l.line_total "
+            "from invoice_items l join invoices i on i.id = l.invoice_id "
+            "join products p on p.id = l.product_id left join suppliers s on s.id = i.supplier_id "
             "where i.business_id = %s and i.status = 'verified' and l.product_id is not null"
         )
         params: list[Any] = [business_id]
@@ -970,6 +989,41 @@ class Database:
             c, sql + " order by i.invoice_date nulls first, i.created_at, i.id, l.sort_order", params
         ))
         return [PurchaseLine.model_validate(row) for row in rows]
+
+    async def save_prediction(self, business_id: str, prediction: ModelPrediction) -> bool:
+        """Keep a prediction once: the same model version, product, date and horizon is not saved twice.
+        Returns True when a new row was saved."""
+        fields = prediction.model_dump()
+
+        def work(c: Conn) -> bool:
+            """Skip it if it is already there, else insert it."""
+            if _fetchone(
+                c,
+                "select 1 from model_predictions where business_id = %s and model_name = %s and model_version = %s "
+                "and product_id is not distinct from %s and target_date is not distinct from %s "
+                "and horizon is not distinct from %s",
+                (business_id, prediction.model_name, prediction.model_version, prediction.product_id,
+                 prediction.target_date, prediction.horizon),
+            ):
+                return False
+            c.execute(
+                f"insert into model_predictions (business_id, {', '.join(fields)}) "
+                f"values (%s, {', '.join(['%s'] * len(fields))})",
+                (business_id, *(Jsonb(v) if k == "payload" else v for k, v in fields.items())),
+            )
+            return True
+
+        return await self._run(work)
+
+    async def list_predictions(self, business_id: str, product_id: str | None = None) -> list[dict[str, Any]]:
+        """Saved predictions, newest first (for checking them against later purchases)."""
+        sql = ("select model_name, model_version, product_id, target_date, horizon, predicted_value, lower_bound, "
+               "upper_bound, baseline_name, baseline_value, payload from model_predictions where business_id = %s")
+        params: list[Any] = [business_id]
+        if product_id:
+            sql += " and product_id = %s"
+            params.append(product_id)
+        return await self._run(lambda c: _fetchall(c, sql + " order by created_at desc", params))
 
     async def business_ids(self) -> list[str]:
         """Every business in this database (one per shop's project), oldest first."""

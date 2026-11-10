@@ -16,6 +16,9 @@ api/                            HTTP routes: read the request, call a service, r
                                 check every data route runs first: valid login token -> its shop
   invoices.py                   Invoice Manager: upload (invoice or receipt photo), type in, get, search,
                                 fix, confirm product, verify, reject, mark paid, audit log; product catalogue
+  analytics.py                  Purchase Analytics (the proposal's Forecast API for Model 1): products with
+                                their expected price, prices to check, one product's history, an
+                                invoice's price check
   dashboard.py                  GET /dashboard (review queue, purchases, supplier spend, payments due,
                                 payments waiting for confirmation and 2-day reminders)
   suppliers.py                  suppliers, credit days, Supplier Profile figures; supplier payments
@@ -36,7 +39,8 @@ services/                       business rules in plain Python (no LLM)
                                 product, verify, reject, mark paid)
   cash_flow_service.py          payables: what is still owed, payments due, supplier totals; supplier
                                 payments (record, correct, confirm, reject) and their confirm rules
-  purchase_analysis_service.py  monthly purchases, supplier spend, a supplier's verified item lines
+  purchase_analysis_service.py  monthly purchases, supplier spend, a supplier's verified item lines, and
+                                Purchase Analytics with Model 1 (each price judged from earlier ones)
   alias_service.py              product catalogue search (exact name, then embeddings in pgvector)
 
 database/
@@ -100,6 +104,9 @@ order in the Supabase SQL editor).
 | GET / POST | `/suppliers` | suppliers |
 | GET / POST | `/suppliers/{id}` | one supplier / change fields such as `credit_days` |
 | GET | `/suppliers/{id}/profile` | totals, invoices, verified item lines and payments |
+| GET | `/analytics/overview` | products with their next expected price, prices outside their range (last year), spend by month and supplier |
+| GET | `/analytics/products/{id}` | one product's unit prices over time with the expected range (keeps the next-purchase prediction in `model_predictions`) |
+| GET | `/analytics/invoices/{id}/price-check` | each line's unit price against its product's expected range |
 | GET | `/payments` | filters: `supplier_id`, `invoice_id`, `status` (`unconfirmed`, `confirmed`, `rejected`) |
 | POST | `/payments` | a payment typed in by hand (unconfirmed; `confirm: true` saves and confirms it) |
 | GET | `/payments/{id}` | one payment, with a link to its receipt photo |
@@ -169,10 +176,12 @@ earlier purchases show the median of their prices, labelled as a baseline.
 
 The model file and its report go to `ml/output/<business id>/` (not in Git) and to the shop's
 private `models` bucket in Supabase Storage (`02_storage.sql` creates it), from which the backend
-will load it. `--no-upload` saves locally only. Retrain when new invoices have been verified.
+loads it on first use (restart the API after retraining). `--no-upload` saves locally only. Retrain
+when new invoices have been verified. Until a shop is trained, Purchase Analytics shows the median
+of recent prices as a baseline and checks nothing.
 
 ## Not built yet
 
-Model 1 on the screens (Purchase Analytics and the invoice review's price check), password reset
+Password reset
 emails, expenses, the Tesseract OCR baseline, Model 2 (spend forecast) and the cash planner
 projection.

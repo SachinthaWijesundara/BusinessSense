@@ -60,6 +60,8 @@ class Purchase:
     quantity: float
     unit_price: float
     invoice_id: str
+    invoice_number: str | None = None
+    supplier_name: str | None = None
 
 
 @dataclass
@@ -129,7 +131,8 @@ def clean(lines: list[PurchaseLine], *, today: date) -> tuple[list[Purchase], li
         usable.append(Purchase(product_id=line.product_id, product_name=line.product_name,
                                supplier_id=line.supplier_id, day=line.invoice_date, quantity=float(line.quantity),
                                unit_price=round(float(line.line_total) / float(line.quantity), 4),
-                               invoice_id=line.invoice_id))
+                               invoice_id=line.invoice_id, invoice_number=line.invoice_number,
+                               supplier_name=line.supplier_name))
     usable.sort(key=lambda p: (p.day, p.invoice_id, p.product_id))
 
     learn: list[Purchase] = []

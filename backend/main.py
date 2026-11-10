@@ -18,7 +18,7 @@ import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -33,17 +33,20 @@ from agentic.sku_match_agent import SkuMatcher
 from agentic.vision_agent import InvoiceVisionReader
 from api.auth import require_owner
 from api.auth import router as auth_router
+from api.analytics import router as analytics_router
 from api.dashboard import router as dashboard_router
 from api.invoices import router as invoices_router
 from api.suppliers import payments_router
 from api.suppliers import router as suppliers_router
 from database.client import Database, RepositoryError, SupabaseAuth, SupabaseStorage
+from ml.inference import ItemPriceModel
 from services.alias_service import Embedder, OpenAIEmbedder
 from services.invoice_service import WorkflowError
 
 # Local development only: values already set in the environment (Render) always win.
 load_dotenv(Path(__file__).resolve().parent / ".env")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 # =============================================================================================
 # 1. Settings
@@ -170,6 +173,8 @@ class AppServices:
     embedder: Embedder
     vision: InvoiceVisionReader
     sku_matcher: SkuMatcher
+    models_storage: Any = None  # the shop's private "models" bucket (trained Model 1); None: not configured
+    _price_models: dict[str, ItemPriceModel | None] = field(default_factory=dict)
 
     def business_id_for(self, request: Request) -> str:
         """The business a request acts for: the one the logged-in owner belongs to.
@@ -185,11 +190,29 @@ class AppServices:
             raise WorkflowError(401, "not_logged_in", "Log in to see this.")
         return self.settings.default_business_id
 
+    async def price_model(self, business_id: str) -> ItemPriceModel | None:
+        """The shop's trained Model 1, loaded from its "models" bucket on first use and kept in memory.
+
+        None until ml/train.py has been run for the shop; the screens then show baselines. After
+        retraining, restart the API to load the new model.
+        """
+        if business_id not in self._price_models:
+            if self.models_storage is None:
+                return None
+            try:
+                self._price_models[business_id] = await ItemPriceModel.from_storage(self.models_storage, business_id)
+            except Exception:  # noqa: BLE001 - without its model the shop still sees baselines
+                logger.exception("could not load Model 1")
+                return None
+        return self._price_models[business_id]
+
     async def aclose(self) -> None:
         """Close the database pool and HTTP clients when the API stops."""
         await self.db.close()
         if self.storage is not None:
             await self.storage.aclose()
+        if self.models_storage is not None:
+            await self.models_storage.aclose()
         if self.auth is not None:
             await self.auth.aclose()
         close = getattr(self.embedder, "aclose", None)
@@ -203,6 +226,7 @@ async def build_services(
     db: Database | None = None,
     storage: Any = None,
     auth: Any = None,
+    models_storage: Any = None,
     embedder: Embedder | None = None,
     vision_model: str | Model | None = None,
     sku_model: str | Model | None = None,
@@ -223,6 +247,10 @@ async def build_services(
         assert settings.supabase_url and settings.supabase_service_role_key
         storage = SupabaseStorage(url=settings.supabase_url, service_key=settings.supabase_service_role_key,
                                   bucket=settings.invoice_bucket)
+    if models_storage is None and settings.storage_configured:
+        assert settings.supabase_url and settings.supabase_service_role_key
+        models_storage = SupabaseStorage(url=settings.supabase_url, service_key=settings.supabase_service_role_key,
+                                         bucket="models")
     if auth is None and settings.storage_configured:
         assert settings.supabase_url and settings.supabase_service_role_key
         auth = SupabaseAuth(url=settings.supabase_url, api_key=settings.supabase_service_role_key)
@@ -243,7 +271,7 @@ async def build_services(
         api_key_configured=key_configured, trace_sensitive_data=settings.trace_sensitive_data,
     )
     return AppServices(settings=settings, db=db, storage=storage, auth=auth, embedder=embedder, vision=vision,
-                       sku_matcher=sku_matcher)
+                       sku_matcher=sku_matcher, models_storage=models_storage)
 
 
 # =============================================================================================
@@ -303,6 +331,7 @@ def create_app(settings: Settings | None = None, services_factory: ServicesFacto
     app.include_router(invoices_router, dependencies=login)
     app.include_router(suppliers_router, dependencies=login)
     app.include_router(payments_router, dependencies=login)
+    app.include_router(analytics_router, dependencies=login)
     return app
 
 

@@ -742,3 +742,103 @@ def test_invoice_list_pages(h):
     assert preflight.status_code == 200
     cors = h.client.get("/invoices", headers={"Origin": "http://localhost:3001"})
     assert "x-total-count" in cors.headers["access-control-expose-headers"].lower()
+
+
+# ---- Purchase Analytics (Model 1) ----------------------------------------------------------------
+def buy(h: Harness, supplier_id: str, number: str, day: date, rate: float, qty: int = 10) -> dict:
+    """A verified invoice buying one product at ``rate`` per unit (the product exists, so the line links)."""
+    body = {"supplier_id": supplier_id, "invoice_number": number, "invoice_date": day.isoformat(), "total": qty * rate,
+            "lines": [{"item_name": "63mm uPVC pipe", "quantity": qty, "mro": rate, "line_total": qty * rate}]}
+    invoice = h.client.post("/invoices", json=body).json()
+    verified = h.client.post(f"/invoices/{invoice['id']}/verify")
+    assert verified.status_code == 200, verified.text
+    return verified.json()
+
+
+def install_model(h: Harness, *, low: float = 0.98, high: float = 1.10, version: str = "item_price-test") -> None:
+    """Put a trained Model 1 (latest-price baseline, -2% / +10% range) in the shop's models bucket."""
+    import asyncio
+    import math
+
+    from ml.train import to_bytes
+
+    data = to_bytes({"format": 1, "model": "item_price", "version": version, "method": "latest price", "learned": False,
+                     "estimator": None, "range_log": (math.log(low), math.log(high)), "min_history": 3,
+                     "report": {"trained_at": "2026-11-01T00:00:00+00:00", "range_pct": {"low": -2.0, "high": 10.0}}})
+    asyncio.run(h.services.models_storage.put(f"{BIZ}/item_price.joblib", data, "application/octet-stream"))
+
+
+def pipe_history(h: Harness) -> tuple[dict, dict, list[dict]]:
+    """Six purchases of the pipe at Rs 585 and one at Rs 800, over the last months."""
+    supplier = h.supplier()
+    pipe = h.product("63mm uPVC pipe")
+    start = date.today() - timedelta(days=200)
+    rates = [585, 585, 585, 585, 800, 590, 590]
+    invoices = [buy(h, supplier["id"], f"H-{n}", start + timedelta(days=25 * n), rate) for n, rate in enumerate(rates)]
+    return supplier, pipe, invoices
+
+
+def test_analytics_without_a_trained_model_shows_baselines(h):
+    """Before ml/train.py has run: medians labelled as baselines, nothing flagged."""
+    _, pipe, _ = pipe_history(h)
+    overview = h.client.get("/analytics/overview").json()
+    assert overview["model"]["trained"] is False and "not been trained" in overview["model"]["note"]
+    [product] = overview["products"]
+    assert (product["product_name"], product["purchases"], product["last_price"]) == ("63mm uPVC pipe", 7, 590.0)
+    assert product["days_between"] == 25.0 and product["total_spend"] == 43200.0
+    assert (product["next"]["expected"], product["next"]["is_baseline"], product["next"]["low"]) == (590.0, True, None)
+    assert overview["flagged"] == [] and len(overview["monthly_purchases"]) == 12
+    detail = h.client.get(f"/analytics/products/{pipe['id']}").json()
+    assert {p["status"] for p in detail["points"]} == {"no_range"}
+    assert h.sql("select count(*) from model_predictions") == [(0,)]
+
+
+def test_analytics_with_model_1_flags_prices_and_keeps_predictions(h):
+    """With the shop's Model 1: each price judged from earlier purchases, the outlier flagged."""
+    install_model(h)
+    _, pipe, invoices = pipe_history(h)
+    overview = h.client.get("/analytics/overview").json()
+    assert overview["model"] | {"note": ""} == {
+        "trained": True, "version": "item_price-test", "method": "latest price", "learner_kept": False,
+        "trained_at": "2026-11-01T00:00:00+00:00", "range_low_pct": -2.0, "range_high_pct": 10.0, "note": ""}
+    assert "baseline" in overview["model"]["note"]
+    flagged = overview["flagged"]
+    assert [(f["invoice_number"], f["status"], f["unit_price"], f["expected"]) for f in flagged] == [
+        ("H-5", "below", 590.0, 800.0), ("H-4", "above", 800.0, 585.0)]
+    assert flagged[1]["difference_pct"] == 36.8 and "pack size" in flagged[1]["message"]
+    assert flagged[1]["invoice_id"] == invoices[4]["id"] and flagged[1]["supplier_name"] == SUPPLIER
+
+    detail = h.client.get(f"/analytics/products/{pipe['id']}").json()
+    assert [p["status"] for p in detail["points"]] == ["no_range", "no_range", "no_range", "inside", "above", "below", "inside"]
+    assert detail["points"][3] | {"day": None, "invoice_id": None} == {
+        "day": None, "invoice_id": None, "invoice_number": "H-3", "supplier_name": SUPPLIER, "quantity": 10.0,
+        "unit_price": 585.0, "expected": 585.0, "low": 573.3, "high": 643.5, "status": "inside", "difference_pct": 0.0}
+    next_price = detail["product"]["next"]
+    assert (next_price["expected"], next_price["low"], next_price["high"], next_price["is_baseline"]) == (590.0, 578.2, 649.0, True)
+    assert sum(m["total"] for m in detail["spend_by_month"]) == 43200.0
+    h.client.get(f"/analytics/products/{pipe['id']}")
+    assert h.sql("select model_name, model_version, horizon, predicted_value::float, lower_bound::float, baseline_name "
+                 "from model_predictions") == [("item_price", "item_price-test", "next purchase", 590.0, 578.2, "rolling median")]
+    assert h.client.get(f"/analytics/products/{MISSING}").status_code == 404
+
+
+def test_invoice_price_check_before_verifying(h):
+    """A new draft's lines are checked against earlier purchases (the draft itself is left out)."""
+    install_model(h)
+    supplier, _, _ = pipe_history(h)
+    h.product("Elbow 63mm")
+    draft = h.client.post("/invoices", json={
+        "supplier_id": supplier["id"], "invoice_number": "NEW-1", "invoice_date": date.today().isoformat(), "total": 9620.0,
+        "lines": [{"item_name": "63mm uPVC pipe", "quantity": 10, "mro": 950.0, "line_total": 9500.0},
+                  {"item_name": "Elbow 63mm", "quantity": 1, "mro": 120.0, "line_total": 120.0}]}).json()
+    pipe_line, elbow_line = h.client.get(f"/analytics/invoices/{draft['id']}/price-check").json()
+    assert (pipe_line["status"], pipe_line["expected"], pipe_line["unit_price"], pipe_line["difference_pct"]) == ("above", 590.0, 950.0, 61.0)
+    assert "Check the unit price and pack size" in pipe_line["message"]
+    assert (elbow_line["status"], elbow_line["expected"]) == ("no_range", None) and "No earlier purchases" in elbow_line["message"]
+    assert h.client.get(f"/analytics/invoices/{MISSING}/price-check").status_code == 404
+
+
+def test_analytics_needs_a_login(h):
+    """Purchase Analytics is shop data: no login, no data."""
+    for path in ("/analytics/overview", f"/analytics/products/{MISSING}", f"/analytics/invoices/{MISSING}/price-check"):
+        assert h.client.get(path, headers={"Authorization": ""}).status_code == 401

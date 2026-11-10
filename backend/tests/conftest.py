@@ -440,7 +440,8 @@ def make_harness(pg_url: str) -> Iterator[Callable[..., Harness]]:
             await database.open()
             holder["services"] = await build_services(
                 s, db=database, storage=MemoryStorage() if with_storage else None, auth=auth,
-                embedder=embedder or HashingEmbedder(), vision_model=vision, sku_model=sku_model(pick=sku_pick),
+                models_storage=MemoryStorage(), embedder=embedder or HashingEmbedder(), vision_model=vision,
+                sku_model=sku_model(pick=sku_pick),
             )
             return holder["services"]
 
