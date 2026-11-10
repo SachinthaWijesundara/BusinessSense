@@ -23,6 +23,7 @@ from services.invoice_service import (
     InvoiceFix,
     PaymentRequest,
     RejectRequest,
+    UnlinkSku,
     WorkflowError,
     confirm_sku,
     create_manual_invoice,
@@ -31,6 +32,7 @@ from services.invoice_service import (
     get_invoice_or_404,
     reject_invoice,
     set_payment_status,
+    unlink_sku,
     verify_invoice,
 )
 
@@ -139,6 +141,13 @@ async def confirm(request: Request, invoice_id: UUID, body: ConfirmSku) -> Invoi
     """'Is this the same as [product]?': link a line to a product (or a new one) and keep the alias."""
     services, business_id = _context(request)
     return await _with_image_link(services, await confirm_sku(services, business_id, str(invoice_id), body))
+
+
+@router.post("/invoices/{invoice_id}/unlink-sku", response_model=Invoice, tags=["invoices"])
+async def unlink(request: Request, invoice_id: UUID, body: UnlinkSku) -> Invoice:
+    """Undo a wrong product link; a verified invoice goes back to draft until it is linked again."""
+    services, business_id = _context(request)
+    return await _with_image_link(services, await unlink_sku(services, business_id, str(invoice_id), body))
 
 
 @router.post("/invoices/{invoice_id}/verify", response_model=Invoice, tags=["invoices"])

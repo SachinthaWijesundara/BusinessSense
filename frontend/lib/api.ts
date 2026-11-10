@@ -375,6 +375,11 @@ export function confirmSku(invoiceId: string, data: ConfirmSku): Promise<Invoice
   return postJson<Invoice>(`/invoices/${invoiceId}/confirm-sku`, data);
 }
 
+/** POST /invoices/{id}/unlink-sku: undo a wrong product link (a verified invoice goes back to draft). */
+export function unlinkSku(invoiceId: string, lineId: string): Promise<Invoice> {
+  return postJson<Invoice>(`/invoices/${invoiceId}/unlink-sku`, { line_id: lineId });
+}
+
 /** POST /invoices/{id}/verify: mark verified, or get the reasons it cannot be yet (409). */
 export function verifyInvoice(invoiceId: string): Promise<Invoice> {
   return request<Invoice>(`/invoices/${invoiceId}/verify`, { method: "POST" });

@@ -672,6 +672,17 @@ class Database:
             (business_id, normalized_text, keep_product_id),
         ))
 
+    async def retire_alias(self, business_id: str, normalized_text: str, product_id: str) -> None:
+        """Stop using this printed text for this product (the owner unlinked it).
+
+        The row stays (unconfirmed) for the audit trail; the product's catalogue name is never touched.
+        """
+        await self._run(lambda c: c.execute(
+            "update product_aliases set confirmed = false "
+            "where business_id = %s and normalized_text = %s and product_id = %s and source <> 'catalogue'",
+            (business_id, normalized_text, product_id),
+        ))
+
     async def find_aliases_exact(self, business_id: str, normalized_text: str) -> list[AliasMatch]:
         """Confirmed aliases with exactly this normalised text (similarity 1.0)."""
         rows = await self._run(lambda c: _fetchall(

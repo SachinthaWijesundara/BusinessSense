@@ -8,7 +8,8 @@ Deterministic rules (plain Python, no LLM; the proposal's "Python business rules
     confirmed payments cover the total; "unconfirmed" while a payment waits for confirmation).
 
 Owner workflow (proposal Figure 6: PendingFix, HumanConfirm and verification):
-  * type in an invoice, fix an invoice, confirm a product, verify, reject, mark paid / unpaid.
+  * type in an invoice, fix an invoice, confirm a product, unlink a wrong product, verify, reject,
+    mark paid / unpaid.
 
 Only a verified invoice whose lines are all linked to products feeds supplier and item history
 and the predictive models. Every correction, confirmation and verification goes to the audit log.
@@ -343,6 +344,13 @@ class ConfirmSku(BaseModel):
         return self
 
 
+class UnlinkSku(BaseModel):
+    """'This is not that product': undo a line's product link."""
+
+    line_id: UUIDStr
+    forget_alias: bool = True  # stop matching this printed text to that product
+
+
 class RejectRequest(BaseModel):
     """Why the owner rejects a draft invoice."""
 
@@ -603,6 +611,41 @@ async def confirm_sku(services: AppServices, business_id: str, invoice_id: str, 
         business_id, invoice_id, "sku_confirmed",
         {"line_id": line.id, "item_name": line.item_name, "product_id": product.id, "product_created": created,
          "previous_status": line.match_status, "suggested_product_id": line.suggested_product_id},
+    )
+    return await get_invoice_or_404(services, business_id, invoice_id)
+
+
+async def unlink_sku(services: AppServices, business_id: str, invoice_id: str, body: UnlinkSku) -> Invoice:
+    """Undo a wrong product link (proposal: "the ability to unlink and rebuild a history").
+
+    The line waits for the owner to pick the right product, and its printed text stops pointing at
+    the wrong one (the alias is kept, unconfirmed, for the audit trail). Every line of a verified
+    invoice must be linked, so a verified invoice goes back to draft; linking the line again and
+    verifying rebuilds the product's history. Logged in the audit log.
+    """
+    db = services.db
+    invoice = await get_invoice_or_404(services, business_id, invoice_id)
+    line = next((item for item in invoice.lines if item.id == body.line_id), None)
+    if line is None:
+        raise WorkflowError(404, "not_found", "Invoice line not found.")
+    if invoice.status == "rejected":
+        raise WorkflowError(409, "rejected", "A rejected invoice is not in any product history.")
+    if line.match_status != "linked" or not line.product_id:
+        raise WorkflowError(409, "not_linked", "This line is not linked to a product.")
+    await db.update_line_match(
+        business_id, invoice_id, line.id,
+        LineMatchUpdate(product_id=None, suggested_product_id=None, match_status="pending",
+                        match_similarity=None, match_candidates=line.match_candidates,
+                        match_reason="Unlinked by the owner: pick the right product."),
+    )
+    if body.forget_alias:
+        await db.retire_alias(business_id, normalize_text(line.item_name), line.product_id)
+    if invoice.status == "verified":
+        await db.update_invoice(business_id, invoice_id, {"status": "draft", "verified_at": None})
+    await db.log_event(
+        business_id, invoice_id, "sku_unlinked",
+        {"line_id": line.id, "item_name": line.item_name, "product_id": line.product_id,
+         "product_name": line.product_name, "alias_forgotten": body.forget_alias, "previous_status": invoice.status},
     )
     return await get_invoice_or_404(services, business_id, invoice_id)
 

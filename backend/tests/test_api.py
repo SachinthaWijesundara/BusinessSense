@@ -907,3 +907,59 @@ def test_cash_plan_endpoint_with_and_without_model_2(h):
     assert saved == [("purchase_spend", 4)]
     dash = h.client.get("/dashboard").json()["forecast"]
     assert dash["bills_due"] == plan["bills_due"] == 40000.0 and dash["model_note"] == plan["model"]["note"]
+
+
+# ---- unlink a product match -----------------------------------------------------------------------
+def test_unlink_a_wrong_product_and_rebuild_the_history(h):
+    """Proposal: owner confirmation, an audit log of every link, and the ability to unlink and
+    rebuild a history. A verified invoice goes back to draft until the line is linked again."""
+    supplier = h.supplier()
+    wrong = h.product("Wall Paint 4L")
+    right = h.product("63mm uPVC pipe Type 1000")
+    draft = h.client.post("/invoices", json={
+        "supplier_id": supplier["id"], "invoice_number": "U-1", "invoice_date": "2026-10-21", "total": 5850.0,
+        "lines": [{"item_name": "PIPE 63 T1000 5.8M", "quantity": 10, "mro": 585.0, "line_total": 5850.0}]}).json()
+    line_id = draft["lines"][0]["id"]
+    linked = h.client.post(f"/invoices/{draft['id']}/confirm-sku", json={"line_id": line_id, "product_id": wrong["id"]})
+    assert linked.status_code == 200 and h.client.post(f"/invoices/{draft['id']}/verify").json()["status"] == "verified"
+    assert h.sql("select confirmed from product_aliases where source = 'owner_confirmed'") == [(True,)]
+
+    unlinked = h.client.post(f"/invoices/{draft['id']}/unlink-sku", json={"line_id": line_id})
+    assert unlinked.status_code == 200, unlinked.text
+    body = unlinked.json()
+    line = body["lines"][0]
+    assert (body["status"], body["verified_at"], line["product_id"], line["match_status"]) == ("draft", None, None, "pending")
+    assert "Unlinked by the owner" in line["match_reason"]
+    assert events(h, draft["id"])[-1] == "sku_unlinked"
+    logged = h.client.get(f"/invoices/{draft['id']}/events").json()[-1]["payload"]
+    assert (logged["product_id"], logged["product_name"], logged["previous_status"], logged["alias_forgotten"]) == (
+        wrong["id"], "Wall Paint 4L", "verified", True)
+    # The wrong product's history no longer has this line, and the printed text no longer points at it.
+    assert h.sql("select count(*) from invoice_items l join invoices i on i.id = l.invoice_id "
+                 "where i.status = 'verified' and l.product_id is not null") == [(0,)]
+    assert h.sql("select confirmed from product_aliases where source = 'owner_confirmed'") == [(False,)]
+    assert h.sql("select count(*) from product_aliases where source = 'catalogue' and confirmed") == [(2,)]
+    assert h.client.post(f"/invoices/{draft['id']}/verify").status_code == 409
+
+    relinked = h.client.post(f"/invoices/{draft['id']}/confirm-sku", json={"line_id": line_id, "product_id": right["id"]})
+    assert relinked.json()["lines"][0]["product_name"] == "63mm uPVC pipe Type 1000"
+    assert h.client.post(f"/invoices/{draft['id']}/verify").json()["status"] == "verified"
+    assert h.sql("select p.name from invoice_items l join products p on p.id = l.product_id") == [("63mm uPVC pipe Type 1000",)]
+
+
+def test_unlink_refusals(h):
+    """Only a linked line of a draft or verified invoice can be unlinked."""
+    supplier = h.supplier()
+    invoice = verified_invoice(h, supplier["id"], "U-2")
+    line_id = invoice["lines"][0]["id"]
+    assert h.client.post(f"/invoices/{invoice['id']}/unlink-sku", json={"line_id": MISSING}).status_code == 404
+    assert h.client.post(f"/invoices/{MISSING}/unlink-sku", json={"line_id": line_id}).status_code == 404
+    assert h.client.post(f"/invoices/{invoice['id']}/unlink-sku", json={"line_id": line_id}).status_code == 200
+    again = h.client.post(f"/invoices/{invoice['id']}/unlink-sku", json={"line_id": line_id})
+    assert again.status_code == 409 and again.json()["error_type"] == "not_linked"
+    h.client.post(f"/invoices/{invoice['id']}/reject", json={"reason": "duplicate"})
+    other_line = invoice["lines"][1]["id"]
+    refused = h.client.post(f"/invoices/{invoice['id']}/unlink-sku", json={"line_id": other_line})
+    assert refused.status_code == 409 and refused.json()["error_type"] == "rejected"
+    assert h.client.post(f"/invoices/{invoice['id']}/unlink-sku", json={"line_id": line_id},
+                         headers={"Authorization": ""}).status_code == 401

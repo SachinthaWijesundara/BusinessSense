@@ -25,6 +25,7 @@ import {
   listSuppliers,
   rejectInvoice,
   setPaymentStatus,
+  unlinkSku,
   verifyInvoice,
 } from "@/lib/api";
 import { money } from "@/lib/money";
@@ -164,6 +165,19 @@ export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
   /** Confirm that a line is an existing catalogue product. */
   function linkProduct(line: InvoiceLine, productId: string) {
     void run(() => confirmSku(invoiceId, { line_id: line.id, product_id: productId }), `Linked "${line.item_name}".`);
+  }
+
+  /** Undo a wrong product link; a verified invoice goes back to draft until the line is linked again. */
+  function unlinkProduct(line: InvoiceLine, invoiceStatus: string) {
+    if (
+      invoiceStatus === "verified" &&
+      !window.confirm(
+        `Unlink "${line.item_name}" from ${line.product_name ?? "its product"}? The invoice goes back to draft until you link the right product and verify it again.`,
+      )
+    ) {
+      return;
+    }
+    void run(() => unlinkSku(invoiceId, line.id), `Unlinked "${line.item_name}". Pick the right product, then verify.`);
   }
 
   /** Create a new catalogue product from a line and link the line to it. */
@@ -429,6 +443,17 @@ export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
                   {/* Only a draft can change its product links; verified history stays as verified. */}
                   {invoice.status === "draft" ? (
                     <ItemAutocomplete products={products} onPick={(product) => linkProduct(line, product.id)} />
+                  ) : null}
+                  {line.match_status === "linked" && invoice.status !== "rejected" ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary mt-1"
+                      disabled={busy}
+                      title="This line is not this product: remove the link"
+                      onClick={() => unlinkProduct(line, invoice.status)}
+                    >
+                      Unlink
+                    </button>
                   ) : null}
                   {invoice.status === "draft" && line.match_status !== "linked" ? (
                     <button
