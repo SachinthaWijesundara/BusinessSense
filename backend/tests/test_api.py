@@ -840,5 +840,34 @@ def test_invoice_price_check_before_verifying(h):
 
 def test_analytics_needs_a_login(h):
     """Purchase Analytics is shop data: no login, no data."""
-    for path in ("/analytics/overview", f"/analytics/products/{MISSING}", f"/analytics/invoices/{MISSING}/price-check"):
+    for path in (
+        "/analytics/overview",
+        "/analytics/cash-overview",
+        f"/analytics/products/{MISSING}",
+        f"/analytics/invoices/{MISSING}/price-check",
+    ):
         assert h.client.get(path, headers={"Authorization": ""}).status_code == 401
+
+
+def test_cash_overview_series_length_and_monthly(h):
+    """GET /analytics/cash-overview returns a full payable window and monthly purchases+paid."""
+    supplier = h.supplier(credit_days=10)
+    inv = h.client.post("/invoices", json={
+        "supplier_id": supplier["id"],
+        "invoice_number": "CASH-1",
+        "invoice_date": date.today().isoformat(),
+        "total": 1000.0,
+        "lines": [{"item_name": "63mm uPVC pipe", "quantity": 10, "mro": 100.0, "line_total": 1000.0}],
+    }).json()
+    # Confirm SKU so item pie can group by product when present; verification still works without it.
+    h.client.post(f"/invoices/{inv['id']}/verify")
+    overview = h.client.get("/analytics/cash-overview?payable_days=30&months=3").json()
+    assert overview["payable_days"] == 30 and overview["months"] == 3
+    assert len(overview["payable_series"]) == 30
+    assert overview["payable_series"][0]["day"] == date.today().isoformat()
+    assert len(overview["monthly"]) == 3
+    assert {"month", "purchases", "paid"} <= set(overview["monthly"][-1])
+    assert isinstance(overview["spend_by_supplier"], list)
+    assert isinstance(overview["spend_by_item"], list)
+    assert "overdue" in overview
+    assert {"total_owed", "invoice_count", "invoices"} <= set(overview["overdue"])

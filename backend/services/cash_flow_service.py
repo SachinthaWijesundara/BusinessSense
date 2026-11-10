@@ -122,6 +122,118 @@ def payments_due(invoices: list[InvoiceSummary], *, today: date, window_days: in
     return sorted(due, key=lambda row: row.due_date)
 
 
+class PayableDayInvoice(BaseModel):
+    """One invoice contributing to a day's expected cash out."""
+
+    invoice_id: str
+    invoice_number: str | None = None
+    supplier_id: str | None = None
+    supplier_name: str | None = None
+    still_owed: float
+    due_date: date
+    days_left: int
+
+
+class PayableDay(BaseModel):
+    """Cash expected to leave on one calendar day (from invoice due dates / credit)."""
+
+    day: date
+    total_owed: float
+    invoices: list[PayableDayInvoice] = Field(default_factory=list)
+
+
+def payable_cash_series(
+    invoices: list[InvoiceSummary], *, today: date, window_days: int = PAYMENTS_DUE_WINDOW_DAYS
+) -> list[PayableDay]:
+    """Daily cash-out series for ``window_days`` from ``today``.
+
+    Unpaid verified invoices due within the window are bucketed by due date. Overdue amounts
+    (due before today) are rolled onto today so the forward-looking chart still shows them.
+    Every day in the window is present, even when the total is 0.
+    """
+    window_days = max(1, int(window_days))
+    days = [today + timedelta(days=offset) for offset in range(window_days)]
+    buckets: dict[date, list[PayableDayInvoice]] = {day: [] for day in days}
+    horizon = days[-1]
+    for inv in unpaid_verified(invoices):
+        if inv.due_date is None or inv.due_date > horizon:
+            continue
+        owed = still_owed(inv)
+        if owed is None or owed <= 0:
+            continue
+        bucket_day = inv.due_date if inv.due_date >= today else today
+        buckets[bucket_day].append(
+            PayableDayInvoice(
+                invoice_id=inv.id,
+                invoice_number=inv.invoice_number,
+                supplier_id=inv.supplier_id,
+                supplier_name=inv.supplier_name,
+                still_owed=owed,
+                due_date=inv.due_date,
+                days_left=(inv.due_date - today).days,
+            )
+        )
+    series: list[PayableDay] = []
+    for day in days:
+        rows = sorted(buckets[day], key=lambda row: (row.due_date, row.supplier_name or "", row.invoice_id))
+        series.append(
+            PayableDay(
+                day=day,
+                total_owed=money_sum([row.still_owed for row in rows]),
+                invoices=rows,
+            )
+        )
+    return series
+
+
+class OverdueInvoice(BaseModel):
+    """One unpaid verified invoice whose due date is already past."""
+
+    invoice_id: str
+    invoice_number: str | None = None
+    supplier_id: str | None = None
+    supplier_name: str | None = None
+    still_owed: float
+    due_date: date
+    days_overdue: int
+
+
+class OverdueBalances(BaseModel):
+    """Total overdue still owed and the invoices that make it up."""
+
+    total_owed: float
+    invoice_count: int
+    invoices: list[OverdueInvoice] = Field(default_factory=list)
+
+
+def overdue_balances(invoices: list[InvoiceSummary], *, today: date) -> OverdueBalances:
+    """Unpaid verified invoices with due_date before today, most overdue first."""
+    rows: list[OverdueInvoice] = []
+    for inv in unpaid_verified(invoices):
+        if inv.due_date is None or inv.due_date >= today:
+            continue
+        owed = still_owed(inv)
+        if owed is None or owed <= 0:
+            continue
+        rows.append(
+            OverdueInvoice(
+                invoice_id=inv.id,
+                invoice_number=inv.invoice_number,
+                supplier_id=inv.supplier_id,
+                supplier_name=inv.supplier_name,
+                still_owed=owed,
+                due_date=inv.due_date,
+                days_overdue=(today - inv.due_date).days,
+            )
+        )
+    rows.sort(key=lambda row: (-row.days_overdue, row.supplier_name or "", row.invoice_id))
+    return OverdueBalances(
+        total_owed=money_sum([row.still_owed for row in rows]),
+        invoice_count=len(rows),
+        invoices=rows,
+    )
+
+
 def _rupees(value: Decimal) -> str:
     """Format rupees for messages: 5850 -> "Rs 5,850.00"."""
     return f"Rs {value.quantize(Decimal('0.01')):,}"

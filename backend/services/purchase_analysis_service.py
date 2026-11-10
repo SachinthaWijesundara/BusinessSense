@@ -20,7 +20,13 @@ from database.client import Invoice, InvoiceSummary, ModelPrediction, SupplierLi
 from ml.features import MIN_HISTORY, Purchase, by_product, clean, latest_price, rolling_median
 from ml.inference import ItemPriceModel, PriceCheck, PricePrediction
 
-from .cash_flow_service import money_sum
+from .cash_flow_service import (
+    OverdueBalances,
+    PayableDay,
+    money_sum,
+    overdue_balances,
+    payable_cash_series,
+)
 
 if TYPE_CHECKING:
     from main import AppServices
@@ -33,12 +39,41 @@ class MonthTotal(BaseModel):
     total: float
 
 
+class MonthPurchasePaid(BaseModel):
+    """Verified purchases and amount_paid for invoices dated in one month."""
+
+    month: str
+    purchases: float
+    paid: float
+
+
 class SupplierSpend(BaseModel):
     """Verified purchases from one supplier."""
 
     supplier_id: str
     supplier_name: str
     total: float
+
+
+class SpendSlice(BaseModel):
+    """One pie slice (supplier or item) with share of period spend."""
+
+    key: str
+    name: str
+    total: float
+    share: float
+
+
+class CashOverview(BaseModel):
+    """Dashboard cash / purchase charts: payable series, overdue, monthly purchases+paid, pies."""
+
+    payable_days: int
+    months: int
+    payable_series: list[PayableDay]
+    overdue: OverdueBalances
+    monthly: list[MonthPurchasePaid]
+    spend_by_supplier: list[SpendSlice]
+    spend_by_item: list[SpendSlice]
 
 
 def last_months(today: date, count: int = 12) -> list[str]:
@@ -65,6 +100,27 @@ def monthly_purchases(invoices: list[InvoiceSummary], *, today: date, months: in
     return [MonthTotal(month=key, total=money_sum(by_month[key])) for key in keys]
 
 
+def monthly_purchases_and_paid(
+    invoices: list[InvoiceSummary], *, today: date, months: int = 3
+) -> list[MonthPurchasePaid]:
+    """Verified purchases and amount_paid per invoice month for the last ``months`` months."""
+    keys = last_months(today, months)
+    purchases: dict[str, list[float | None]] = {key: [] for key in keys}
+    paid: dict[str, list[float | None]] = {key: [] for key in keys}
+    for inv in invoices:
+        if inv.status != "verified" or inv.invoice_date is None:
+            continue
+        key = inv.invoice_date.strftime("%Y-%m")
+        if key not in purchases:
+            continue
+        purchases[key].append(inv.total)
+        paid[key].append(inv.amount_paid or 0.0)
+    return [
+        MonthPurchasePaid(month=key, purchases=money_sum(purchases[key]), paid=money_sum(paid[key]))
+        for key in keys
+    ]
+
+
 def supplier_spend(invoices: list[InvoiceSummary], *, limit: int = 10) -> list[SupplierSpend]:
     """Verified purchases per supplier, highest first (top ``limit``)."""
     by_supplier: dict[str, tuple[str, list[float | None]]] = {}
@@ -74,6 +130,105 @@ def supplier_spend(invoices: list[InvoiceSummary], *, limit: int = 10) -> list[S
             totals.append(inv.total)
     spend = [SupplierSpend(supplier_id=sid, supplier_name=name, total=money_sum(totals)) for sid, (name, totals) in by_supplier.items()]
     return sorted(spend, key=lambda row: row.total, reverse=True)[:limit]
+
+
+def _month_window_bounds(today: date, months: int) -> tuple[date, date]:
+    """Inclusive invoice_date window covering the last ``months`` calendar months."""
+    keys = last_months(today, months)
+    first = keys[0]
+    year, month = int(first[:4]), int(first[5:7])
+    return date(year, month, 1), today
+
+
+def spend_slices_by_supplier(
+    invoices: list[InvoiceSummary], *, today: date, months: int = 3, slice_limit: int = 8
+) -> list[SpendSlice]:
+    """Verified spend by supplier in the lookback, top slices + Other."""
+    start, end = _month_window_bounds(today, months)
+    by_supplier: dict[str, tuple[str, list[float | None]]] = {}
+    for inv in invoices:
+        if inv.status != "verified" or inv.invoice_date is None:
+            continue
+        if inv.invoice_date < start or inv.invoice_date > end:
+            continue
+        sid = inv.supplier_id or "unknown"
+        name = inv.supplier_name or "Unknown supplier"
+        _, totals = by_supplier.setdefault(sid, (name, []))
+        if inv.supplier_name:
+            by_supplier[sid] = (inv.supplier_name, totals)
+        totals.append(inv.total)
+    ranked = sorted(
+        (
+            SpendSlice(key=sid, name=name, total=money_sum(totals), share=0.0)
+            for sid, (name, totals) in by_supplier.items()
+        ),
+        key=lambda row: row.total,
+        reverse=True,
+    )
+    return _with_other_slices(ranked, slice_limit=slice_limit)
+
+
+def spend_slices_by_item(lines: list[SupplierLine], *, slice_limit: int = 8) -> list[SpendSlice]:
+    """Verified line spend by product_id; unmatched lines bucket to Unmatched."""
+    by_item: dict[str, tuple[str, list[float | None]]] = {}
+    for line in lines:
+        if line.product_id:
+            key, name = line.product_id, (line.product_name or line.item_name or "Item")
+        else:
+            key, name = "unmatched", "Unmatched"
+        _, totals = by_item.setdefault(key, (name, []))
+        if line.product_id and line.product_name:
+            by_item[key] = (line.product_name, totals)
+        totals.append(line.line_total)
+    ranked = sorted(
+        (
+            SpendSlice(key=key, name=name, total=money_sum(totals), share=0.0)
+            for key, (name, totals) in by_item.items()
+        ),
+        key=lambda row: row.total,
+        reverse=True,
+    )
+    return _with_other_slices(ranked, slice_limit=slice_limit)
+
+
+def _with_other_slices(ranked: list[SpendSlice], *, slice_limit: int) -> list[SpendSlice]:
+    """Keep the top slices, fold the rest into Other, and fill share."""
+    total = money_sum([row.total for row in ranked]) or 1.0
+    top = ranked[:slice_limit]
+    rest = ranked[slice_limit:]
+    other_total = money_sum([row.total for row in rest])
+    slices = [
+        SpendSlice(key=row.key, name=row.name, total=row.total, share=row.total / total)
+        for row in top
+    ]
+    if other_total > 0:
+        slices.append(SpendSlice(key="other", name="Other", total=other_total, share=other_total / total))
+    return slices
+
+
+async def cash_overview(
+    services: AppServices,
+    business_id: str,
+    *,
+    today: date,
+    payable_days: int = 30,
+    months: int = 3,
+) -> CashOverview:
+    """Payable cash-out series plus monthly purchases/paid and supplier/item pies."""
+    payable_days = max(1, min(int(payable_days), 365))
+    months = max(1, min(int(months), 36))
+    invoices = await services.db.list_all_invoices(business_id)
+    start, end = _month_window_bounds(today, months)
+    lines = await services.db.list_verified_lines(business_id, date_from=start, date_to=end)
+    return CashOverview(
+        payable_days=payable_days,
+        months=months,
+        payable_series=payable_cash_series(invoices, today=today, window_days=payable_days),
+        overdue=overdue_balances(invoices, today=today),
+        monthly=monthly_purchases_and_paid(invoices, today=today, months=months),
+        spend_by_supplier=spend_slices_by_supplier(invoices, today=today, months=months),
+        spend_by_item=spend_slices_by_item(lines),
+    )
 
 
 async def supplier_lines(services: AppServices, business_id: str, supplier_id: str) -> list[SupplierLine]:

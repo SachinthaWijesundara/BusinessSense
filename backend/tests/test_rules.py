@@ -10,12 +10,27 @@ import pytest
 from agentic.guardrails import blocking_fields, missing_fields
 from agentic.schemas import ExtractedDocument, InvoiceDraft, InvoiceLineDraft
 from api.dashboard import build_dashboard
-from database.client import InvoiceSummary, PaymentRecord
+from database.client import InvoiceSummary, PaymentRecord, SupplierLine
 from main import DEFAULT_BUSINESS_ID, Settings
 from services.alias_service import normalize_text
 from services.invoice_service import compute_due_date, date_issues, invoice_payment_status, math_audit, parse_iso_date
-from services.cash_flow_service import confirm_blockers, payments_due, reminders, still_owed, supplier_totals
-from services.purchase_analysis_service import last_months, monthly_purchases, supplier_spend
+from services.cash_flow_service import (
+    confirm_blockers,
+    overdue_balances,
+    payable_cash_series,
+    payments_due,
+    reminders,
+    still_owed,
+    supplier_totals,
+)
+from services.purchase_analysis_service import (
+    last_months,
+    monthly_purchases,
+    monthly_purchases_and_paid,
+    spend_slices_by_item,
+    spend_slices_by_supplier,
+    supplier_spend,
+)
 from tests.conftest import invoice_doc, invoice_line, receipt_doc
 
 
@@ -206,6 +221,54 @@ def test_purchase_analysis_and_payments_due_directly():
     due = [summary(id="a", due_date=date(2026, 3, 20)), summary(id="b", due_date=date(2026, 3, 1))]
     assert [p.invoice_id for p in payments_due(due, today=date(2026, 2, 28), window_days=30)] == ["b", "a"]
     assert payments_due(due, today=date(2026, 2, 28), window_days=0) == []
+
+
+def test_payable_cash_series_buckets_and_rolls_overdue():
+    """Forward series length matches the window; overdue cash lands on today."""
+    today = date(2026, 11, 10)
+    invoices = [
+        summary(id="over", total=100.0, amount_paid=0.0, due_date=date(2026, 11, 1),
+                supplier_name="A", invoice_number="O-1"),
+        summary(id="soon", total=250.0, amount_paid=50.0, due_date=date(2026, 11, 12),
+                supplier_name="B", invoice_number="S-1"),
+        summary(id="far", total=80.0, due_date=date(2026, 12, 20)),
+        summary(id="paid", total=40.0, payment_status="paid", due_date=date(2026, 11, 11)),
+    ]
+    series = payable_cash_series(invoices, today=today, window_days=5)
+    assert len(series) == 5 and series[0].day == today and series[-1].day == date(2026, 11, 14)
+    assert series[0].total_owed == 100.0 and [r.invoice_id for r in series[0].invoices] == ["over"]
+    assert series[2].total_owed == 200.0 and series[2].invoices[0].still_owed == 200.0
+    assert all(day.total_owed == 0.0 for day in series if day.day not in (today, date(2026, 11, 12)))
+    overdue = overdue_balances(invoices, today=today)
+    assert overdue.total_owed == 100.0 and overdue.invoice_count == 1
+    assert overdue.invoices[0].days_overdue == 9 and overdue.invoices[0].invoice_id == "over"
+
+
+def test_monthly_paid_and_spend_pies():
+    """Paid uses amount_paid on invoices dated that month; pies group supplier and product."""
+    today = date(2026, 11, 15)
+    invoices = [
+        summary(id="1", total=1000.0, amount_paid=400.0, invoice_date=date(2026, 11, 2),
+                supplier_id="s1", supplier_name="A"),
+        summary(id="2", total=500.0, amount_paid=500.0, invoice_date=date(2026, 10, 5),
+                supplier_id="s2", supplier_name="B", payment_status="paid"),
+        summary(id="3", status="draft", total=999.0, amount_paid=0.0, invoice_date=date(2026, 11, 1)),
+    ]
+    monthly = monthly_purchases_and_paid(invoices, today=today, months=2)
+    assert [(m.month, m.purchases, m.paid) for m in monthly] == [
+        ("2026-10", 500.0, 500.0),
+        ("2026-11", 1000.0, 400.0),
+    ]
+    suppliers = spend_slices_by_supplier(invoices, today=today, months=2)
+    assert [(s.name, s.total) for s in suppliers] == [("A", 1000.0), ("B", 500.0)]
+    lines = [
+        SupplierLine(invoice_id="1", item_name="Pipe", product_id="p1", product_name="Pipe 63", line_total=700.0),
+        SupplierLine(invoice_id="1", item_name="Odd", product_id=None, product_name=None, line_total=300.0),
+        SupplierLine(invoice_id="2", item_name="Pipe", product_id="p1", product_name="Pipe 63", line_total=500.0),
+    ]
+    items = spend_slices_by_item(lines)
+    assert [(i.name, i.total) for i in items] == [("Pipe 63", 1200.0), ("Unmatched", 300.0)]
+    assert abs(sum(i.share for i in items) - 1.0) < 1e-9
 
 
 # ---- supplier payments ---------------------------------------------------------------------------

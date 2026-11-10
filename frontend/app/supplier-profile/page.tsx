@@ -5,16 +5,18 @@
  * for the owner's confirmation (all suppliers), and one supplier's profile (?supplier=<id>):
  * details, usual credit days, totals and outstanding balance (calculated by the backend), invoices
  * with paid / not-paid marking, payments (record, upload a receipt, check, confirm, reject) and the
- * item lines bought.
+ * purchases grouped by SKU for the focus period.
  */
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { DocumentUpload } from "@/components/DocumentUpload";
 import { StatusBadge } from "@/components/InvoiceList";
 import { PaymentForm } from "@/components/PaymentForm";
 import { PaymentList } from "@/components/PaymentList";
+import { SkuPurchasesTable } from "@/components/SkuPurchasesTable";
+import { SupplierDashboard } from "@/components/SupplierDashboard";
 import { SupplierForm } from "@/components/SupplierForm";
 import {
   errorMessage,
@@ -25,17 +27,15 @@ import {
   updateSupplier,
 } from "@/lib/api";
 import { money, numberText, parseNumber } from "@/lib/money";
+import {
+  currentMonth,
+  monthLabel,
+  previousMonth,
+  readFocusMonth,
+  skuPurchasesInMonth,
+  writeFocusMonth,
+} from "@/lib/supplierMetrics";
 import type { Supplier, SupplierPayment, SupplierProfile } from "@/lib/types";
-
-/** One total from the backend, shown as a small card. */
-function Total({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="bs-card !p-3">
-      <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">{label}</p>
-      <p className="mt-1 text-lg font-semibold text-[var(--brand-deep)]">{value}</p>
-    </div>
-  );
-}
 
 /** Credit-days editor: the owner records the supplier's usual credit period. */
 function CreditDaysEditor({ supplier, onSaved }: { supplier: Supplier; onSaved: () => void }) {
@@ -114,6 +114,55 @@ function WaitingPayments({ refreshKey, onChanged }: { refreshKey: number; onChan
   );
 }
 
+/** Purchases grouped by SKU for the focus month (This / Last / picker). */
+function SkuPurchasesPanel({ profile }: { profile: SupplierProfile }) {
+  const [month, setMonth] = useState(() => readFocusMonth());
+  const rows = useMemo(() => skuPurchasesInMonth(profile, month), [profile, month]);
+
+  function setFocus(next: string) {
+    setMonth(next);
+    writeFocusMonth(next);
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-[var(--brand-deep)]">Purchases by SKU</p>
+          <p className="text-xs text-[var(--muted)]">Qty and average price for {monthLabel(month)}.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className={`btn ${month === currentMonth() ? "btn-primary" : "btn-secondary"}`}
+            onClick={() => setFocus(currentMonth())}
+          >
+            This month
+          </button>
+          <button
+            type="button"
+            className={`btn ${month === previousMonth() ? "btn-primary" : "btn-secondary"}`}
+            onClick={() => setFocus(previousMonth())}
+          >
+            Last month
+          </button>
+          <label className="text-sm">
+            Month
+            <input
+              className="field ml-2"
+              type="month"
+              max={currentMonth()}
+              value={month}
+              onChange={(event) => setFocus(event.target.value)}
+            />
+          </label>
+        </div>
+      </div>
+      <SkuPurchasesTable rows={rows} emptyText={`No SKU purchases in ${monthLabel(month)}.`} />
+    </div>
+  );
+}
+
 /** One supplier's profile, loaded from GET /suppliers/{id}/profile. */
 function ProfileView({ supplierId, refreshKey, onChanged }: { supplierId: string; refreshKey: number; onChanged: () => void }) {
   const [version, setVersion] = useState(0);
@@ -162,12 +211,15 @@ function ProfileView({ supplierId, refreshKey, onChanged }: { supplierId: string
   if (result.error) return <p className="banner-error">{result.error}</p>;
   const profile = result.profile;
   if (!profile) return null;
-  const { supplier, totals } = profile;
+  const { supplier } = profile;
 
   return (
     <div className="space-y-4">
       <div className="bs-card">
-        <h2 className="text-xl font-semibold text-[var(--brand-deep)]">{supplier.name}</h2>
+        <Link href="/supplier-profile" className="text-sm text-[var(--brand)] hover:underline">
+          ← All suppliers
+        </Link>
+        <h2 className="mt-2 text-xl font-semibold text-[var(--brand-deep)]">{supplier.name}</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
           {[supplier.phone1, supplier.phone2, supplier.email, supplier.address].filter(Boolean).join(" · ") ||
             "No contact details."}
@@ -177,165 +229,127 @@ function ProfileView({ supplierId, refreshKey, onChanged }: { supplierId: string
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Total label="Invoices" value={String(totals.invoice_count)} />
-        <Total label="Drafts" value={String(totals.draft_count)} />
-        <Total label="Verified total" value={money(totals.verified_total)} />
-        <Total label="Outstanding" value={money(totals.outstanding)} />
-        <Total label="Next due" value={totals.next_due_date ?? "—"} />
-        <Total label="Paid (confirmed)" value={money(totals.paid_total)} />
-        <Total
-          label="Waiting confirmation"
-          value={totals.unconfirmed_count ? `${money(totals.unconfirmed_total)} (${totals.unconfirmed_count})` : "—"}
-        />
-      </div>
+      <SupplierDashboard key={supplier.id} profile={profile} />
 
       {actionError ? <p className="banner-error">{actionError}</p> : null}
       {notice ? <p className="banner-ok">{notice}</p> : null}
 
-      <div className="bs-card overflow-x-auto">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-semibold text-[var(--brand-deep)]">Payments</p>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn btn-primary" onClick={() => setAdding(adding === "typed" ? "" : "typed")}>
-              Record payment
-            </button>
-            <button type="button" className="btn btn-secondary" onClick={() => setAdding(adding === "photo" ? "" : "photo")}>
-              Upload receipt
-            </button>
-          </div>
-        </div>
-        {adding === "typed" ? (
-          <div className="mb-3 rounded border border-[var(--line)] p-3">
-            <PaymentForm
-              supplierId={supplier.id}
-              onSaved={(payment) => {
-                setAdding("");
-                setNotice(
-                  payment.status === "confirmed"
-                    ? "Payment saved and confirmed."
-                    : "Payment saved. Confirm it once you have checked it.",
-                );
+      <details className="bs-card supplier-ledger">
+        <summary className="mb-0">Ledger &amp; payments</summary>
+        <div className="mt-4 space-y-4 border-t border-[var(--line)] pt-4">
+          <div className="overflow-x-auto">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-[var(--brand-deep)]">Payments</p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className="btn btn-primary" onClick={() => setAdding(adding === "typed" ? "" : "typed")}>
+                  Record payment
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={() => setAdding(adding === "photo" ? "" : "photo")}>
+                  Upload receipt
+                </button>
+              </div>
+            </div>
+            {adding === "typed" ? (
+              <div className="mb-3 rounded border border-[var(--line)] p-3">
+                <PaymentForm
+                  supplierId={supplier.id}
+                  onSaved={(payment) => {
+                    setAdding("");
+                    setNotice(
+                      payment.status === "confirmed"
+                        ? "Payment saved and confirmed."
+                        : "Payment saved. Confirm it once you have checked it.",
+                    );
+                    reload();
+                  }}
+                  onCancel={() => setAdding("")}
+                />
+              </div>
+            ) : null}
+            {adding === "photo" ? (
+              <DocumentUpload
+                className="mb-3"
+                supplierId={supplier.id}
+                onReceiptSaved={(receipt) => {
+                  setAdding("");
+                  setNotice(
+                    `Receipt ${receipt.receipt_number ?? ""} read: ${receipt.payments.length} payment(s) saved. ` +
+                      "Check each one against the photo and confirm it.",
+                  );
+                  reload();
+                }}
+              />
+            ) : null}
+            <PaymentList
+              payments={profile.payments}
+              onChanged={() => {
+                setNotice("");
                 reload();
               }}
-              onCancel={() => setAdding("")}
             />
           </div>
-        ) : null}
-        {adding === "photo" ? (
-          <DocumentUpload
-            className="mb-3"
-            supplierId={supplier.id}
-            onReceiptSaved={(receipt) => {
-              setAdding("");
-              setNotice(
-                `Receipt ${receipt.receipt_number ?? ""} read: ${receipt.payments.length} payment(s) saved. ` +
-                  "Check each one against the photo and confirm it.",
-              );
-              reload();
-            }}
-          />
-        ) : null}
-        <PaymentList
-          payments={profile.payments}
-          onChanged={() => {
-            setNotice("");
-            reload();
-          }}
-        />
-      </div>
 
-      <div className="bs-card overflow-x-auto">
-        <p className="mb-2 text-sm font-semibold text-[var(--brand-deep)]">Invoices</p>
-        <table className="entry-table">
-          <thead>
-            <tr>
-              <th>Invoice #</th>
-              <th>Date</th>
-              <th>Due</th>
-              <th className="text-right">Total</th>
-              <th className="text-right">Paid</th>
-              <th>Status</th>
-              <th>Payment</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {profile.invoices.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="px-3 py-4 text-[var(--muted)]">
-                  No invoices from this supplier yet.
-                </td>
-              </tr>
-            ) : (
-              profile.invoices.map((invoice) => (
-                <tr key={invoice.id}>
-                  <td className="px-2 py-2">
-                    <Link href={`/invoice-manager/${invoice.id}`} className="text-[var(--brand)] hover:underline">
-                      {invoice.invoice_number ?? "—"}
-                    </Link>
-                  </td>
-                  <td className="px-2 py-2">{invoice.invoice_date ?? "—"}</td>
-                  <td className="px-2 py-2">{invoice.due_date ?? "—"}</td>
-                  <td className="px-2 py-2 text-right">{money(invoice.total)}</td>
-                  <td className="px-2 py-2 text-right">{invoice.amount_paid > 0 ? money(invoice.amount_paid) : "—"}</td>
-                  <td className="px-2 py-2">
-                    <StatusBadge status={invoice.status} />
-                  </td>
-                  <td className="px-2 py-2">{invoice.payment_status}</td>
-                  <td className="px-2 py-2 text-right">
-                    {invoice.status === "verified" ? (
-                      invoice.payment_status === "paid" ? (
-                        <button type="button" className="btn btn-secondary" onClick={() => markPayment(invoice.id, "unpaid")}>
-                          Mark unpaid
-                        </button>
-                      ) : (
-                        <button type="button" className="btn btn-secondary" onClick={() => markPayment(invoice.id, "paid")}>
-                          Mark paid
-                        </button>
-                      )
-                    ) : null}
-                  </td>
+          <div className="overflow-x-auto">
+            <p className="mb-2 text-sm font-semibold text-[var(--brand-deep)]">Invoices</p>
+            <table className="entry-table">
+              <thead>
+                <tr>
+                  <th>Invoice #</th>
+                  <th>Date</th>
+                  <th>Due</th>
+                  <th className="text-right">Total</th>
+                  <th className="text-right">Paid</th>
+                  <th>Status</th>
+                  <th>Payment</th>
+                  <th></th>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+              </thead>
+              <tbody>
+                {profile.invoices.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-4 text-[var(--muted)]">
+                      No invoices from this supplier yet.
+                    </td>
+                  </tr>
+                ) : (
+                  profile.invoices.map((invoice) => (
+                    <tr key={invoice.id}>
+                      <td className="px-2 py-2">
+                        <Link href={`/invoice-manager/${invoice.id}`} className="text-[var(--brand)] hover:underline">
+                          {invoice.invoice_number ?? "—"}
+                        </Link>
+                      </td>
+                      <td className="px-2 py-2">{invoice.invoice_date ?? "—"}</td>
+                      <td className="px-2 py-2">{invoice.due_date ?? "—"}</td>
+                      <td className="px-2 py-2 text-right">{money(invoice.total)}</td>
+                      <td className="px-2 py-2 text-right">{invoice.amount_paid > 0 ? money(invoice.amount_paid) : "—"}</td>
+                      <td className="px-2 py-2">
+                        <StatusBadge status={invoice.status} />
+                      </td>
+                      <td className="px-2 py-2">{invoice.payment_status}</td>
+                      <td className="px-2 py-2 text-right">
+                        {invoice.status === "verified" ? (
+                          invoice.payment_status === "paid" ? (
+                            <button type="button" className="btn btn-secondary" onClick={() => markPayment(invoice.id, "unpaid")}>
+                              Mark unpaid
+                            </button>
+                          ) : (
+                            <button type="button" className="btn btn-secondary" onClick={() => markPayment(invoice.id, "paid")}>
+                              Mark paid
+                            </button>
+                          )
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
 
-      <div className="bs-card overflow-x-auto">
-        <p className="mb-2 text-sm font-semibold text-[var(--brand-deep)]">Items bought (verified invoices)</p>
-        {profile.lines.length === 0 ? (
-          <p className="text-sm text-[var(--muted)]">No verified item lines yet.</p>
-        ) : (
-          <table className="entry-table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Invoice #</th>
-                <th>Printed item</th>
-                <th>Product</th>
-                <th className="text-right">Qty</th>
-                <th className="text-right">Rate</th>
-                <th className="text-right">Line total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {profile.lines.map((line, index) => (
-                <tr key={`${line.invoice_id}-${index}`}>
-                  <td className="px-2 py-2">{line.invoice_date ?? "—"}</td>
-                  <td className="px-2 py-2">{line.invoice_number ?? "—"}</td>
-                  <td className="px-2 py-2">{line.item_name}</td>
-                  <td className="px-2 py-2">{line.product_name ?? "—"}</td>
-                  <td className="px-2 py-2 text-right">{line.quantity ?? "—"}</td>
-                  <td className="px-2 py-2 text-right">{money(line.mro)}</td>
-                  <td className="px-2 py-2 text-right">{money(line.line_total)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+          <SkuPurchasesPanel profile={profile} />
+        </div>
+      </details>
     </div>
   );
 }
@@ -373,13 +387,30 @@ function SupplierProfileScreen() {
     router.push(`/supplier-profile?supplier=${supplier.id}`);
   }
 
+  // Full-width dashboard when a supplier is open; otherwise the picker list.
+  if (selectedId) {
+    return (
+      <div className="space-y-4">
+        <ProfileView
+          key={selectedId}
+          supplierId={selectedId}
+          refreshKey={paymentsVersion}
+          onChanged={() => {
+            setListVersion((current) => current + 1);
+            setPaymentsVersion((current) => current + 1);
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-[var(--brand-deep)]">Supplier Profile</h1>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Invoices, items, prices, credit terms and what is still owed to each supplier.
+            Choose a supplier for a full-screen purchasing dashboard (SKUs, spend, payables).
           </p>
         </div>
         {!adding ? (
@@ -399,46 +430,25 @@ function SupplierProfileScreen() {
 
       <WaitingPayments refreshKey={paymentsVersion} onChanged={() => setPaymentsVersion((current) => current + 1)} />
 
-      <div className="grid gap-4 lg:grid-cols-[16rem_1fr]">
-        <div className="bs-card !p-2">
-          {suppliers === null ? (
-            <p className="p-2 text-sm text-[var(--muted)]">Loading suppliers…</p>
-          ) : suppliers.length === 0 ? (
-            <p className="p-2 text-sm text-[var(--muted)]">No suppliers yet.</p>
-          ) : (
-            <ul>
-              {suppliers.map((supplier) => (
-                <li key={supplier.id}>
-                  <Link
-                    href={`/supplier-profile?supplier=${supplier.id}`}
-                    className={`block rounded px-3 py-2 text-sm hover:bg-[#eef5f1] ${
-                      supplier.id === selectedId ? "bg-[#e6f4ec] font-semibold" : ""
-                    }`}
-                  >
-                    {supplier.name}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <div>
-          {selectedId ? (
-            <ProfileView
-              key={selectedId}
-              supplierId={selectedId}
-              refreshKey={paymentsVersion}
-              onChanged={() => {
-                setListVersion((current) => current + 1);
-                setPaymentsVersion((current) => current + 1);
-              }}
-            />
-          ) : (
-            <div className="bs-card">
-              <div className="bs-empty text-sm">Choose a supplier to see its profile.</div>
-            </div>
-          )}
-        </div>
+      <div className="bs-card !p-2">
+        {suppliers === null ? (
+          <p className="p-2 text-sm text-[var(--muted)]">Loading suppliers…</p>
+        ) : suppliers.length === 0 ? (
+          <p className="p-2 text-sm text-[var(--muted)]">No suppliers yet.</p>
+        ) : (
+          <ul className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+            {suppliers.map((supplier) => (
+              <li key={supplier.id}>
+                <Link
+                  href={`/supplier-profile?supplier=${supplier.id}`}
+                  className="block rounded px-3 py-2 text-sm hover:bg-[#eef5f1]"
+                >
+                  {supplier.name}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );
