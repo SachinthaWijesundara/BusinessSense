@@ -6,6 +6,7 @@
  * Every screen needs a login: without one the login page opens (and comes back afterwards).
  */
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useSyncExternalStore, type ReactNode } from "react";
@@ -96,9 +97,14 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="bs-shell">
       <aside className="bs-nav flex flex-col" tabIndex={-1}>
         <div className="bs-nav-brand mb-6 px-1">
-          <p className="bs-nav-brand-mark text-lg font-semibold tracking-wide text-white">BS</p>
+          <p className="bs-nav-brand-mark">
+            <Image src="/businesssense-icon.png" alt="BusinessSense" width={36} height={36} className="rounded-md" priority />
+          </p>
           <div className="bs-nav-label-block">
-            <p className="text-lg font-semibold tracking-wide text-white">BusinessSense</p>
+            <p className="flex items-center gap-2 text-lg font-semibold tracking-wide text-white">
+              <Image src="/businesssense-icon.png" alt="" width={32} height={32} className="rounded-md" />
+              BusinessSense
+            </p>
             <p className="mt-1 text-xs text-[#a8c4b6]">Owner app · purchasing intelligence</p>
           </div>
         </div>
