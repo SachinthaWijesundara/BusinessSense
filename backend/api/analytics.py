@@ -11,14 +11,16 @@ from datetime import date
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 
 from services.invoice_service import WorkflowError, get_invoice_or_404
 from services.purchase_analysis_service import (
     AnalyticsOverview,
+    CashOverview,
     LineCheck,
     ProductHistory,
     analytics_overview,
+    cash_overview,
     invoice_price_check,
     product_history,
 )
@@ -41,6 +43,19 @@ async def overview(request: Request) -> AnalyticsOverview:
     month and by supplier."""
     services, business_id = _context(request)
     return await analytics_overview(services, business_id, today=date.today())
+
+
+@router.get("/cash-overview", response_model=CashOverview)
+async def cash(
+    request: Request,
+    payable_days: int = Query(30, ge=1, le=365),
+    months: int = Query(3, ge=1, le=36),
+) -> CashOverview:
+    """Dashboard charts: payable cash-out by day, monthly purchases+paid, supplier and item pies."""
+    services, business_id = _context(request)
+    return await cash_overview(
+        services, business_id, today=date.today(), payable_days=payable_days, months=months
+    )
 
 
 @router.get("/products/{product_id}", response_model=ProductHistory)

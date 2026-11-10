@@ -2,15 +2,16 @@
 
 /**
  * Dashboard screen (proposal): invoices waiting for review, supplier payments due soon, payments
- * waiting for the owner's confirmation (with a reminder after two days), monthly purchases,
- * supplier spending and the forecast slot. Every number comes from GET /dashboard.
+ * waiting for confirmation, plus cash-overview charts (payable area, overdue, monthly purchases+paid,
+ * supplier/item pies). Attention figures come from GET /dashboard; charts from GET /analytics/cash-overview.
  */
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { errorMessage, getDashboard } from "@/lib/api";
+import { DashboardCharts } from "@/components/DashboardCharts";
+import { errorMessage, getCashOverview, getDashboard } from "@/lib/api";
 import { money } from "@/lib/money";
-import type { Dashboard } from "@/lib/types";
+import type { CashOverview, Dashboard } from "@/lib/types";
 
 /** One headline number with its label. */
 function Stat({ label, value, href }: { label: string; value: string; href?: string }) {
@@ -23,17 +24,43 @@ function Stat({ label, value, href }: { label: string; value: string; href?: str
   return href ? <Link href={href}>{body}</Link> : body;
 }
 
-/** The dashboard: what needs attention first. */
+/** The dashboard: what needs attention first, then cash / purchase charts. */
 export default function DashboardPage() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [cash, setCash] = useState<CashOverview | null>(null);
   const [error, setError] = useState("");
+  const [cashError, setCashError] = useState("");
+  const [payableDays, setPayableDays] = useState(30);
+  const [months, setMonths] = useState(3);
+  const [cashLoadedFor, setCashLoadedFor] = useState("");
+  const cashKey = `${payableDays}:${months}`;
+  const cashLoading = cashLoadedFor !== cashKey;
 
-  // Load the dashboard figures from the backend.
   useEffect(() => {
     getDashboard()
       .then(setDashboard)
       .catch((err) => setError(errorMessage(err)));
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    getCashOverview({ payable_days: payableDays, months })
+      .then((overview) => {
+        if (!cancelled) {
+          setCash(overview);
+          setCashError("");
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setCashError(errorMessage(err));
+      })
+      .finally(() => {
+        if (!cancelled) setCashLoadedFor(`${payableDays}:${months}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [payableDays, months]);
 
   if (error) {
     return (
@@ -44,9 +71,6 @@ export default function DashboardPage() {
     );
   }
   if (!dashboard) return <p className="text-[var(--muted)]">Loading dashboard…</p>;
-
-  // Bar lengths are only for drawing: each month relative to the largest month.
-  const largestMonth = Math.max(1, ...dashboard.monthly_purchases.map((month) => month.total));
 
   return (
     <div className="space-y-5">
@@ -82,6 +106,20 @@ export default function DashboardPage() {
           <p className="mt-1 text-xs">They stay unconfirmed, and are not counted as paid, until you confirm them.</p>
         </div>
       ) : null}
+
+      {cashError ? <p className="banner-error">{cashError}</p> : null}
+      {cash ? (
+        <DashboardCharts
+          data={cash}
+          payableDays={payableDays}
+          months={months}
+          onPayableDays={setPayableDays}
+          onMonths={setMonths}
+          loading={cashLoading}
+        />
+      ) : (
+        <p className="text-sm text-[var(--muted)]">Loading cash charts…</p>
+      )}
 
       <div className="bs-card overflow-x-auto">
         <p className="mb-2 text-sm font-semibold text-[var(--brand-deep)]">Supplier payments due soon</p>
@@ -122,49 +160,6 @@ export default function DashboardPage() {
             </tbody>
           </table>
         )}
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="bs-card">
-          <p className="mb-3 text-sm font-semibold text-[var(--brand-deep)]">Monthly purchases</p>
-          {dashboard.monthly_purchases.length === 0 ? (
-            <p className="text-sm text-[var(--muted)]">No verified invoices yet.</p>
-          ) : (
-            <ul className="space-y-2">
-              {dashboard.monthly_purchases.map((month) => (
-                <li key={month.month} className="grid grid-cols-[5rem_1fr_7rem] items-center gap-3 text-sm">
-                  <span>{month.month}</span>
-                  <div className="bar-track">
-                    <div className="bar-fill" style={{ width: `${(month.total / largestMonth) * 100}%` }} />
-                  </div>
-                  <span className="text-right">{money(month.total)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div className="bs-card overflow-x-auto">
-          <p className="mb-3 text-sm font-semibold text-[var(--brand-deep)]">Spending by supplier</p>
-          {dashboard.supplier_spend.length === 0 ? (
-            <p className="text-sm text-[var(--muted)]">No verified invoices yet.</p>
-          ) : (
-            <table className="entry-table">
-              <tbody>
-                {dashboard.supplier_spend.map((supplier) => (
-                  <tr key={supplier.supplier_id}>
-                    <td className="px-2 py-2">
-                      <Link href={`/supplier-profile?supplier=${supplier.supplier_id}`} className="text-[var(--brand)] hover:underline">
-                        {supplier.supplier_name}
-                      </Link>
-                    </td>
-                    <td className="px-2 py-2 text-right">{money(supplier.total)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
       </div>
 
       <div className="bs-card">

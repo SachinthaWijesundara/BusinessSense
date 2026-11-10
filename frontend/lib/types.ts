@@ -434,6 +434,74 @@ export type AnalyticsOverview = {
   supplier_spend: { supplier_id: string; supplier_name: string; total: number }[];
 };
 
+/** One invoice on a payable cash-out day (GET /analytics/cash-overview). */
+export type PayableDayInvoice = {
+  invoice_id: string;
+  invoice_number: string | null;
+  supplier_id: string | null;
+  supplier_name: string | null;
+  still_owed: number;
+  due_date: string;
+  days_left: number;
+};
+
+/** One day in the payable cash-out series. */
+export type PayableDay = {
+  day: string;
+  total_owed: number;
+  invoices: PayableDayInvoice[];
+};
+
+/** One overdue invoice in the overdue balances block. */
+export type OverdueInvoice = {
+  invoice_id: string;
+  invoice_number: string | null;
+  supplier_id: string | null;
+  supplier_name: string | null;
+  still_owed: number;
+  due_date: string;
+  days_overdue: number;
+};
+
+/** Overdue balances summary for the dashboard meter. */
+export type OverdueBalances = {
+  total_owed: number;
+  invoice_count: number;
+  invoices: OverdueInvoice[];
+};
+
+/** Monthly purchases + amount_paid for invoices dated that month. */
+export type MonthPurchasePaid = {
+  month: string;
+  purchases: number;
+  paid: number;
+};
+
+/** Pie slice for supplier or item spend. */
+export type SpendSlice = {
+  key: string;
+  name: string;
+  total: number;
+  share: number;
+};
+
+/** Reply of GET /analytics/cash-overview. */
+export type CashOverview = {
+  payable_days: number;
+  months: number;
+  payable_series: PayableDay[];
+  overdue: OverdueBalances;
+  monthly: MonthPurchasePaid[];
+  spend_by_supplier: SpendSlice[];
+  spend_by_item: SpendSlice[];
+};
+
+/** Query for GET /analytics/cash-overview. */
+export type CashOverviewQuery = {
+  payable_days?: number;
+  months?: number;
+};
+
 /** Reply of GET /analytics/products/{id}. */
 export type ProductHistory = {
   model: ModelInfo;

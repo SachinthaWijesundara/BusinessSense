@@ -13,6 +13,8 @@
 import type {
   AnalyticsOverview,
   AuditEvent,
+  CashOverview,
+  CashOverviewQuery,
   ConfirmSku,
   Dashboard,
   Health,
@@ -458,6 +460,11 @@ export function rejectPayment(paymentId: string, reason: string): Promise<Suppli
 /** GET /analytics/overview: products with their expected next price, flagged prices, spend. */
 export function getAnalyticsOverview(): Promise<AnalyticsOverview> {
   return request<AnalyticsOverview>("/analytics/overview");
+}
+
+/** GET /analytics/cash-overview: payable series, overdue, monthly purchases+paid, supplier/item pies. */
+export function getCashOverview(query: CashOverviewQuery = {}): Promise<CashOverview> {
+  return request<CashOverview>(`/analytics/cash-overview${queryString(query)}`);
 }
 
 /** GET /analytics/products/{id}: one product's prices over time with the expected range. */

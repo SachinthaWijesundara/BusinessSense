@@ -852,6 +852,28 @@ class Database:
         ))
         return [SupplierLine.model_validate(row) for row in rows]
 
+    async def list_verified_lines(
+        self, business_id: str, *, date_from: date | None = None, date_to: date | None = None
+    ) -> list[SupplierLine]:
+        """All verified invoice lines for the business (optional invoice_date window), newest first."""
+        sql = (
+            "select i.id as invoice_id, i.invoice_number, i.invoice_date, l.item_name, l.product_id, "
+            f"p.name as product_name, l.quantity, {_LINE_RATE} as mro, l.line_total "
+            "from invoice_items l join invoices i on i.id = l.invoice_id "
+            "left join products p on p.id = l.product_id "
+            "where i.business_id = %s and i.status = 'verified'"
+        )
+        params: list[Any] = [business_id]
+        if date_from is not None:
+            sql += " and i.invoice_date >= %s"
+            params.append(date_from)
+        if date_to is not None:
+            sql += " and i.invoice_date <= %s"
+            params.append(date_to)
+        sql += " order by i.invoice_date desc nulls last, i.created_at desc, l.sort_order"
+        rows = await self._run(lambda c: _fetchall(c, sql, params))
+        return [SupplierLine.model_validate(row) for row in rows]
+
     async def find_invoices_by_number_any_supplier(self, business_id: str, invoice_number: str) -> list[InvoiceSummary]:
         """Every invoice with exactly this number, whatever its supplier (to place a receipt)."""
         rows = await self._run(lambda c: _fetchall(
