@@ -3,7 +3,8 @@
 * A throwaway Postgres with pgvector (PGlite: Postgres compiled to WebAssembly, in tests/pglite),
   started once per run and rebuilt from the repo-root database/*.sql files before each test.
 * Fakes for the paid or remote parts: scripted Agents SDK models instead of OpenAI, an offline
-  hashing embedder, and an in-memory photo store.
+  hashing embedder, an in-memory photo store, and a stand-in for Supabase Auth with one owner
+  login (every API test request is sent logged in as that owner).
 * Builders for fictional invoices and synthetic invoice photos. Never put the participating
   shop's real names, invoices or photos here: the repository is public.
 * ``make_harness``: the real API (TestClient) wired to all of the above.
@@ -35,7 +36,7 @@ from agents import set_tracing_disabled  # noqa: E402
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from database.client import Database  # noqa: E402
+from database.client import AuthError, Database, LoginSession  # noqa: E402
 from main import AppServices, Settings, build_services, create_app  # noqa: E402
 from services.alias_service import normalize_text  # noqa: E402
 
@@ -47,11 +48,14 @@ SQL_FILES = sorted((REPO_DIR / "database").glob("*.sql"))
 PGLITE_DIR = BACKEND_DIR / "tests" / "pglite"
 BIZ = "00000000-0000-0000-0000-000000000001"
 SUPPLIER = "Lanka Pipe Traders"
+OWNER = "aaaaaaaa-0000-0000-0000-00000000000a"  # the test shop's owner login
+OWNER_EMAIL, OWNER_PASSWORD, OWNER_TOKEN = "owner@example.com", "correct horse battery", "owner-token"
 
 # Stand-ins for what Supabase provides (auth.uid(), storage.buckets, API roles), so the SQL files
 # run on plain Postgres exactly as they would on Supabase.
 SUPABASE_STUBS = """
 create schema auth;
+create table auth.users (id uuid primary key, email text);
 create function auth.uid() returns uuid language sql stable as
   $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 create schema storage;
@@ -189,6 +193,61 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
     return dot / ((math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))) or 1.0)
 
 
+class FakeAuth:
+    """Stand-in for Supabase Auth: known accounts, plain-text tokens, revocation on logout."""
+
+    def __init__(self) -> None:
+        """Start with the test shop's owner account and its ready-made access token."""
+        self.accounts: dict[str, tuple[str, str]] = {OWNER_EMAIL: (OWNER_PASSWORD, OWNER)}
+        self.tokens: dict[str, str] = {OWNER_TOKEN: OWNER}
+        self.refresh_tokens: dict[str, tuple[str, str]] = {}
+
+    def add_account(self, email: str, password: str, user_id: str) -> None:
+        """Another login (e.g. one not linked to any shop)."""
+        self.accounts[email] = (password, user_id)
+
+    def _issue(self, user_id: str, email: str) -> LoginSession:
+        """A new access + refresh token pair."""
+        number = len(self.tokens) + len(self.refresh_tokens)
+        access, refresh = f"access-{number}", f"refresh-{number}"
+        self.tokens[access] = user_id
+        self.refresh_tokens[refresh] = (user_id, email)
+        return LoginSession(access_token=access, refresh_token=refresh, expires_in=3600, user_id=user_id, email=email)
+
+    async def sign_in(self, email: str, password: str) -> LoginSession:
+        """Check an email and password."""
+        account = self.accounts.get(email)
+        if account is None or account[0] != password:
+            raise AuthError(401, "Email or password is incorrect.")
+        return self._issue(account[1], email)
+
+    async def refresh(self, refresh_token: str) -> LoginSession:
+        """Swap a refresh token (each one works once)."""
+        found = self.refresh_tokens.pop(refresh_token, None)
+        if found is None:
+            raise AuthError(401, "Your login has expired. Log in again.")
+        return self._issue(*found)
+
+    async def sign_out(self, access_token: str) -> None:
+        """Revoke an access token."""
+        self.tokens.pop(access_token, None)
+
+    async def user_id(self, access_token: str) -> str | None:
+        """The user of a valid token."""
+        return self.tokens.get(access_token)
+
+    async def aclose(self) -> None:
+        """Nothing to close."""
+
+
+def add_login(url: str, user_id: str, email: str, business_id: str | None = BIZ) -> None:
+    """A Supabase Auth user in the test database, linked to a business (or to none)."""
+    run_sql(url, "insert into auth.users (id, email) values (%s, %s) on conflict do nothing", (user_id, email))
+    if business_id:
+        run_sql(url, "insert into business_users (business_id, user_id) values (%s, %s) on conflict do nothing",
+                (business_id, user_id))
+
+
 class MemoryStorage:
     """In-memory stand-in for SupabaseStorage."""
 
@@ -236,15 +295,18 @@ def invoice_doc(*, supplier: str | None = SUPPLIER, number: str | None = "INV-10
     }
 
 
-def receipt_doc() -> dict[str, Any]:
-    """An agent answer for a payment receipt."""
+def receipt_doc(*, supplier: str | None = SUPPLIER, number: str | None = "R-77", date: str | None = "2026-10-22",
+                method: str | None = "cash", payments: list[tuple[str | None, float | None]] | None = None,
+                cheques: list[dict[str, Any]] | None = None, low_confidence: list[str] | None = None) -> dict[str, Any]:
+    """An agent answer for a payment receipt: ``payments`` are (invoice number, amount settled)."""
+    payments = [("INV-1001", 6750.0)] if payments is None else payments
     return {
         "doc_type": "receipt",
-        "supplier": {"name": SUPPLIER, "address": None, "phone1": None},
+        "supplier": {"name": supplier, "address": None, "phone1": None},
         "invoice": None,
-        "receipt": {"receipt_number": "R-77", "receipt_date": "2026-10-22", "payment_method": "cash",
-                    "payments": [{"invoice_number": "INV-1001", "amount": 6750.0}], "cheques": []},
-        "low_confidence_fields": [],
+        "receipt": {"receipt_number": number, "receipt_date": date, "payment_method": method,
+                    "payments": [{"invoice_number": n, "amount": a} for n, a in payments], "cheques": cheques or []},
+        "low_confidence_fields": low_confidence or [],
     }
 
 
@@ -325,12 +387,14 @@ BASE_SETTINGS = Settings(sku_match_threshold=0.5)
 class Harness:
     """A running API plus handles to its scripted vision model, services and test database."""
 
-    def __init__(self, client: TestClient, services: AppServices, vision: ScriptedModel, pg_url: str) -> None:
+    def __init__(self, client: TestClient, services: AppServices, vision: ScriptedModel, pg_url: str,
+                 auth: FakeAuth) -> None:
         """Keep the client and everything behind it."""
         self.client = client
         self.services = services
         self.vision = vision
         self.pg_url = pg_url
+        self.auth = auth
 
     def upload(self, doc: dict[str, Any] | Exception, **form: str):
         """Upload a photo; the scripted vision model answers with ``doc``."""
@@ -370,15 +434,17 @@ def make_harness(pg_url: str) -> Iterator[Callable[..., Harness]]:
             database = Database(pg_url, max_size=1)
             await database.open()
             holder["services"] = await build_services(
-                s, db=database, storage=MemoryStorage() if with_storage else None, embedder=embedder or HashingEmbedder(),
-                vision_model=vision, sku_model=sku_model(pick=sku_pick),
+                s, db=database, storage=MemoryStorage() if with_storage else None, auth=auth,
+                embedder=embedder or HashingEmbedder(), vision_model=vision, sku_model=sku_model(pick=sku_pick),
             )
             return holder["services"]
 
-        client = TestClient(create_app(settings, factory))
+        auth = FakeAuth()
+        add_login(pg_url, OWNER, OWNER_EMAIL)
+        client = TestClient(create_app(settings, factory), headers={"Authorization": f"Bearer {OWNER_TOKEN}"})
         client.__enter__()
         opened.append(client)
-        return Harness(client, holder["services"], vision, pg_url)
+        return Harness(client, holder["services"], vision, pg_url, auth)
 
     yield make
     for client in opened:

@@ -1,11 +1,14 @@
 """Everything the backend uses to read and write Supabase (proposal: database/client.py).
 
-1. Record models   the shape of each row the API reads or writes (suppliers, products, invoices...).
+1. Record models   the shape of each row the API reads or writes (suppliers, products, invoices,
+                   supplier payments...).
 2. ``Database``    all SQL against Supabase Postgres, through psycopg 3. Each method runs in one
                    transaction, so an invoice header and its lines always change together.
                    psycopg's synchronous pool is used and every call runs in a worker thread:
                    psycopg's async mode cannot run on Windows' default event loop.
 3. ``SupabaseStorage``  the private bucket for invoice photos, with short-lived signed links.
+4. ``SupabaseAuth``     owner login through Supabase Auth: sign in, refresh, sign out, and
+                        checking a login token. Passwords never reach the database tables.
 
 Every query filters on ``business_id``: one shop never sees another shop's rows.
 The tables themselves are created by the SQL files in the repo-root ``database/`` folder.
@@ -14,6 +17,7 @@ The tables themselves are created by the SQL files in the repo-root ``database/`
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import date, datetime
@@ -35,7 +39,9 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstra
 
 InvoiceStatus = Literal["draft", "verified", "rejected"]
 MatchStatus = Literal["unmatched", "linked", "pending", "new_product"]
-PaymentStatus = Literal["unpaid", "paid", "unconfirmed"]
+PaymentStatus = Literal["unpaid", "paid", "unconfirmed"]  # an invoice's payment state
+SupplierPaymentStatus = Literal["unconfirmed", "confirmed", "rejected"]  # one recorded payment
+PaymentMethod = Literal["cash", "cheque", "bank_transfer"]
 
 
 def _uuid_text(value: str) -> str:
@@ -165,11 +171,13 @@ class NewInvoice(BaseModel):
 
 
 class InvoiceSummary(NewInvoice):
-    """A saved invoice without its lines (list rows)."""
+    """A saved invoice without its lines (list rows). ``amount_paid`` is the sum of the owner's
+    confirmed supplier payments linked to it."""
 
     id: str
     business_id: str
     supplier_name: str | None = None
+    amount_paid: float = 0.0
     verified_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -192,6 +200,7 @@ class InvoiceQuery(BaseModel):
     date_from: date | None = None
     date_to: date | None = None
     limit: int = Field(100, ge=1, le=500)
+    offset: int = Field(0, ge=0)  # how many matching invoices to skip (for pages)
 
 
 class SupplierLine(BaseModel):
@@ -233,6 +242,45 @@ class ExtractionRunLog(BaseModel):
     duration_ms: int | None = None
 
 
+class NewPayment(BaseModel):
+    """A supplier payment to save: typed in by the owner, or one invoice settled on a receipt photo."""
+
+    supplier_id: str | None = None
+    supplier_name_raw: str | None = None
+    invoice_id: str | None = None
+    invoice_number_raw: str | None = None
+    amount: float | None = None
+    paid_on: date | None = None
+    method: PaymentMethod | None = None
+    receipt_number: str | None = None
+    cheque_number: str | None = None
+    bank_name: str | None = None
+    cheque_date: date | None = None
+    status: SupplierPaymentStatus = "unconfirmed"
+    source: Literal["manual", "agent"] = "manual"
+    image_path: str | None = None
+    low_confidence_fields: list[str] = Field(default_factory=list)
+    confirmed_at: datetime | None = None
+
+
+class PaymentRecord(NewPayment):
+    """A saved supplier payment, with its supplier's name and its invoice's number.
+
+    ``reminder_due`` is true once it has waited more than two days for the owner's confirmation;
+    ``image_url`` is filled in by the API (signed link to the receipt photo).
+    """
+
+    id: str
+    business_id: str
+    supplier_name: str | None = None
+    invoice_number: str | None = None
+    reminder_sent_at: datetime | None = None
+    reminder_due: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    image_url: str | None = None
+
+
 class AuditEvent(BaseModel):
     """One correction, confirmation or verification in the audit log."""
 
@@ -253,6 +301,13 @@ INVOICE_UPDATABLE_COLUMNS = frozenset(
     }
 )
 SUPPLIER_UPDATABLE_COLUMNS = frozenset({"name", "credit_days", "phone1", "phone2", "email", "address"})
+PAYMENT_UPDATABLE_COLUMNS = frozenset(
+    {
+        "supplier_id", "invoice_id", "invoice_number_raw", "amount", "paid_on", "method", "receipt_number",
+        "cheque_number", "bank_name", "cheque_date", "status", "image_path", "confirmed_at",
+    }
+)
+PAYMENT_REMINDER_DAYS = 2  # proposal: an unconfirmed payment gets a reminder after two days
 
 
 class RepositoryError(Exception):
@@ -290,10 +345,35 @@ _LINE_FIELDS = (
     "product_id", "suggested_product_id", "match_status", "match_similarity", "match_candidates",
     "match_reason",
 )
-# Invoice columns plus the supplier's name from the suppliers table.
+# Lines typed in the newer data-entry style keep the rate in mrp / discount_rate / net_price and
+# leave mro at 0; for them the rate actually paid per unit is net_price.
+_LINE_RATE = "case when l.mro = 0 and l.net_price is not null then l.net_price else l.mro end"
+
+
+def _line_column(name: str) -> str:
+    """One invoice_items column for a select (the unit rate as paid for MRP-style lines)."""
+    return f"{_LINE_RATE} as mro" if name == "mro" else f"l.{name}"
+
+
+# Invoice columns plus the supplier's name and the confirmed payments made against it.
 _INVOICE_SELECT = (
-    "select " + ", ".join(f"i.{name}" for name in _INVOICE_FIELDS) + ", s.name as supplier_name "
+    "select " + ", ".join(f"i.{name}" for name in _INVOICE_FIELDS) + ", s.name as supplier_name, "
+    "coalesce((select sum(sp.amount) from supplier_payments sp "
+    "where sp.invoice_id = i.id and sp.status = 'confirmed'), 0) as amount_paid "
     "from invoices i left join suppliers s on s.id = i.supplier_id "
+)
+_PAYMENT_FIELDS = (
+    "id", "business_id", "supplier_id", "supplier_name_raw", "invoice_id", "invoice_number_raw", "amount",
+    "paid_on", "method", "receipt_number", "cheque_number", "bank_name", "cheque_date", "status", "source",
+    "image_path", "low_confidence_fields", "confirmed_at", "reminder_sent_at", "created_at", "updated_at",
+)
+# Payment columns plus the supplier's name, the invoice's number and whether a reminder is due.
+_PAYMENT_SELECT = (
+    "select " + ", ".join(f"p.{name}" for name in _PAYMENT_FIELDS) + ", s.name as supplier_name, "
+    "i.invoice_number, (p.status = 'unconfirmed' and p.created_at <= now() - "
+    f"interval '{PAYMENT_REMINDER_DAYS} days') as reminder_due "
+    "from supplier_payments p left join suppliers s on s.id = p.supplier_id "
+    "left join invoices i on i.id = p.invoice_id "
 )
 
 
@@ -360,7 +440,7 @@ def _load_invoice(conn: Conn, business_id: str, invoice_id: str) -> Invoice | No
         return None
     line_rows = _fetchall(
         conn,
-        "select " + ", ".join(f"l.{name}" for name in _LINE_FIELDS) + ", p.name as product_name "
+        "select " + ", ".join(_line_column(name) for name in _LINE_FIELDS) + ", p.name as product_name "
         "from invoice_items l left join products p on p.id = l.product_id "
         "where l.invoice_id = %s order by l.sort_order, l.id",
         (invoice_id,),
@@ -609,8 +689,9 @@ class Database:
         """One invoice with its lines, or None."""
         return await self._run(lambda c: _load_invoice(c, business_id, invoice_id))
 
-    async def list_invoices(self, business_id: str, query: InvoiceQuery) -> list[InvoiceSummary]:
-        """Search invoices (newest invoice date first)."""
+    @staticmethod
+    def _invoice_filters(business_id: str, query: InvoiceQuery) -> tuple[list[str], list[Any]]:
+        """The where-clauses and values of an invoice search."""
         clauses = ["i.business_id = %s"]
         params: list[Any] = [business_id]
         for column, value in (
@@ -628,14 +709,26 @@ class Database:
             literal = (query.invoice_number.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
             clauses.append("i.invoice_number ilike %s escape '\\'")
             params.append(f"%{literal}%")
-        params.append(query.limit)
+        return clauses, params
+
+    async def list_invoices(self, business_id: str, query: InvoiceQuery) -> list[InvoiceSummary]:
+        """Search invoices, newest invoice date first, one page at a time (limit / offset)."""
+        clauses, params = self._invoice_filters(business_id, query)
         rows = await self._run(lambda c: _fetchall(
             c,
             _INVOICE_SELECT + f"where {' and '.join(clauses)} "
-            "order by i.invoice_date desc nulls last, i.created_at desc limit %s",
-            params,
+            "order by i.invoice_date desc nulls last, i.created_at desc, i.id limit %s offset %s",
+            [*params, query.limit, query.offset],
         ))
         return [InvoiceSummary.model_validate(row) for row in rows]
+
+    async def count_invoices(self, business_id: str, query: InvoiceQuery) -> int:
+        """How many invoices match a search (all pages together)."""
+        clauses, params = self._invoice_filters(business_id, query)
+        row = await self._run(lambda c: _fetchone(
+            c, f"select count(*) as n from invoices i where {' and '.join(clauses)}", params
+        ))
+        return int(row["n"]) if row else 0
 
     async def list_all_invoices(self, business_id: str, *, supplier_id: str | None = None) -> list[InvoiceSummary]:
         """Every invoice of the business (or of one supplier), for totals and the dashboard."""
@@ -715,7 +808,7 @@ class Database:
         rows = await self._run(lambda c: _fetchall(
             c,
             "select i.id as invoice_id, i.invoice_number, i.invoice_date, l.item_name, l.product_id, "
-            "p.name as product_name, l.quantity, l.mro, l.line_total "
+            f"p.name as product_name, l.quantity, {_LINE_RATE} as mro, l.line_total "
             "from invoice_items l join invoices i on i.id = l.invoice_id "
             "left join products p on p.id = l.product_id "
             "where i.business_id = %s and i.supplier_id = %s and i.status = 'verified' "
@@ -723,6 +816,133 @@ class Database:
             (business_id, supplier_id),
         ))
         return [SupplierLine.model_validate(row) for row in rows]
+
+    async def find_invoices_by_number_any_supplier(self, business_id: str, invoice_number: str) -> list[InvoiceSummary]:
+        """Every invoice with exactly this number, whatever its supplier (to place a receipt)."""
+        rows = await self._run(lambda c: _fetchall(
+            c, _INVOICE_SELECT + "where i.business_id = %s and i.invoice_number = %s order by i.created_at",
+            (business_id, invoice_number),
+        ))
+        return [InvoiceSummary.model_validate(row) for row in rows]
+
+    # ---- supplier payments -------------------------------------------------------------------
+    async def create_payments(self, business_id: str, payments: Sequence[NewPayment]) -> list[PaymentRecord]:
+        """Save payments together (all the rows of one receipt, or one typed-in payment)."""
+
+        def work(c: Conn) -> list[dict[str, Any]]:
+            """Check each supplier and invoice belongs to the business, insert, read the rows back."""
+            ids = []
+            for payment in payments:
+                if payment.supplier_id and _fetchone(
+                    c, "select 1 from suppliers where business_id = %s and id = %s", (business_id, payment.supplier_id)
+                ) is None:
+                    raise NotFoundError("supplier not found")
+                if payment.invoice_id and _fetchone(
+                    c, "select 1 from invoices where business_id = %s and id = %s", (business_id, payment.invoice_id)
+                ) is None:
+                    raise NotFoundError("invoice not found")
+                fields = payment.model_dump()
+                row = _fetchone(
+                    c,
+                    f"insert into supplier_payments (business_id, {', '.join(fields)}) "
+                    f"values (%s, {', '.join(['%s'] * len(fields))}) returning id",
+                    (business_id, *(_param(column, value) for column, value in fields.items())),
+                )
+                assert row is not None
+                ids.append(row["id"])
+            return [
+                row for payment_id in ids
+                if (row := _fetchone(c, _PAYMENT_SELECT + "where p.business_id = %s and p.id = %s",
+                                     (business_id, payment_id))) is not None
+            ]
+
+        return [PaymentRecord.model_validate(row) for row in await self._run(work)]
+
+    async def get_payment(self, business_id: str, payment_id: str) -> PaymentRecord | None:
+        """One payment, or None."""
+        row = await self._run(lambda c: _fetchone(
+            c, _PAYMENT_SELECT + "where p.business_id = %s and p.id = %s", (business_id, payment_id)
+        ))
+        return PaymentRecord.model_validate(row) if row else None
+
+    async def list_payments(
+        self,
+        business_id: str,
+        *,
+        supplier_id: str | None = None,
+        invoice_id: str | None = None,
+        status: SupplierPaymentStatus | None = None,
+        receipt_number: str | None = None,
+    ) -> list[PaymentRecord]:
+        """Payments filtered by supplier, invoice, status or receipt number (newest payment first)."""
+        clauses = ["p.business_id = %s"]
+        params: list[Any] = [business_id]
+        for clause, value in (
+            ("p.supplier_id = %s", supplier_id),
+            ("p.invoice_id = %s", invoice_id),
+            ("p.status = %s", status),
+            ("p.receipt_number = %s", receipt_number),
+        ):
+            if value:
+                clauses.append(clause)
+                params.append(value)
+        rows = await self._run(lambda c: _fetchall(
+            c,
+            _PAYMENT_SELECT + f"where {' and '.join(clauses)} "
+            "order by p.paid_on desc nulls first, p.created_at desc, p.receipt_number, p.id",
+            params,
+        ))
+        return [PaymentRecord.model_validate(row) for row in rows]
+
+    async def update_payment(self, business_id: str, payment_id: str, changes: dict[str, Any]) -> PaymentRecord:
+        """Change some payment fields (corrections, confirmation, rejection)."""
+        check_columns(changes, PAYMENT_UPDATABLE_COLUMNS)
+        assignments = "".join(f"{column} = %s, " for column in changes)
+
+        def work(c: Conn) -> dict[str, Any] | None:
+            """Check a new supplier or invoice belongs to the business, update, read the row back."""
+            if changes.get("supplier_id") and _fetchone(
+                c, "select 1 from suppliers where business_id = %s and id = %s", (business_id, changes["supplier_id"])
+            ) is None:
+                raise NotFoundError("supplier not found")
+            if changes.get("invoice_id") and _fetchone(
+                c, "select 1 from invoices where business_id = %s and id = %s", (business_id, changes["invoice_id"])
+            ) is None:
+                raise NotFoundError("invoice not found")
+            row = _fetchone(
+                c,
+                f"update supplier_payments set {assignments}updated_at = now() "
+                "where business_id = %s and id = %s returning id",
+                (*(_param(column, value) for column, value in changes.items()), business_id, payment_id),
+            )
+            if row is None:
+                raise NotFoundError("payment not found")
+            return _fetchone(c, _PAYMENT_SELECT + "where p.business_id = %s and p.id = %s", (business_id, payment_id))
+
+        row = await self._run(work)
+        assert row is not None
+        return PaymentRecord.model_validate(row)
+
+    async def mark_reminders_sent(self, business_id: str, payment_ids: Sequence[str]) -> None:
+        """Record when the owner was first reminded about payments still waiting for confirmation."""
+        if not payment_ids:
+            return
+        await self._run(lambda c: c.execute(
+            "update supplier_payments set reminder_sent_at = now() "
+            "where business_id = %s and id = any(%s::uuid[]) and reminder_sent_at is null",
+            (business_id, list(payment_ids)),
+        ))
+
+    # ---- login ---------------------------------------------------------------------------------
+    async def business_for_user(self, user_id: str) -> tuple[str, str] | None:
+        """The business (id, name) a Supabase Auth login belongs to, or None."""
+        row = await self._run(lambda c: _fetchone(
+            c,
+            "select b.id, b.name from business_users bu join businesses b on b.id = bu.business_id "
+            "where bu.user_id = %s order by bu.created_at limit 1",
+            (user_id,),
+        ))
+        return (row["id"], row["name"]) if row else None
 
     # ---- logs --------------------------------------------------------------------------------
     async def log_extraction_run(self, business_id: str, run: ExtractionRunLog) -> None:
@@ -803,6 +1023,110 @@ class SupabaseStorage:
             return None
         signed = response.json().get("signedURL") or response.json().get("signedUrl")
         return f"{self._base}{signed}" if signed else None
+
+    async def aclose(self) -> None:
+        """Close the HTTP client."""
+        await self._client.aclose()
+
+
+# =============================================================================================
+# 4. Supabase Auth (owner login)
+# =============================================================================================
+
+
+class AuthError(Exception):
+    """A login was refused (wrong email or password, expired session, too many attempts)."""
+
+    def __init__(self, status_code: int, message: str) -> None:
+        """Keep the HTTP status to send back and a message for the owner."""
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
+
+
+class LoginSession(BaseModel):
+    """What a successful login or refresh gives the browser."""
+
+    access_token: str
+    refresh_token: str
+    expires_in: int
+    user_id: str
+    email: str | None = None
+
+
+class SupabaseAuth:
+    """Owner login through Supabase Auth, called only from the backend with the server key.
+
+    Supabase keeps the passwords (hashed); this class only passes them on to sign in and checks
+    the short-lived access tokens the browser sends back. A checked token is remembered for up to
+    a minute so every request does not call Supabase again.
+    """
+
+    CACHE_SECONDS = 60.0
+
+    def __init__(self, *, url: str, api_key: str, client: httpx.AsyncClient | None = None) -> None:
+        """Remember the Auth address and the server key (tests pass a mock HTTP client)."""
+        self._base = url.rstrip("/") + "/auth/v1"
+        self._api_key = api_key
+        self._client = client or httpx.AsyncClient(timeout=20)
+        self._checked: dict[str, tuple[str, float]] = {}
+
+    def _headers(self, token: str | None = None) -> dict[str, str]:
+        """The server key, and the user's token when the call is about that user."""
+        headers = {"apikey": self._api_key}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        elif self._api_key.startswith("eyJ"):
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        return headers
+
+    def _session(self, response: httpx.Response) -> LoginSession:
+        """Turn Supabase's token reply into a LoginSession, or raise AuthError."""
+        if response.status_code == 429:
+            raise AuthError(429, "Too many login attempts. Wait a few minutes and try again.")
+        if response.status_code >= 400:
+            raise AuthError(401, "Email or password is incorrect.")
+        data = response.json()
+        user = data.get("user") or {}
+        return LoginSession(access_token=data["access_token"], refresh_token=data["refresh_token"],
+                            expires_in=int(data.get("expires_in") or 3600), user_id=user["id"],
+                            email=user.get("email"))
+
+    async def sign_in(self, email: str, password: str) -> LoginSession:
+        """Check an email and password with Supabase Auth."""
+        response = await self._client.post(f"{self._base}/token", params={"grant_type": "password"},
+                                           json={"email": email, "password": password}, headers=self._headers())
+        return self._session(response)
+
+    async def refresh(self, refresh_token: str) -> LoginSession:
+        """Swap a refresh token for a new session (the old refresh token stops working)."""
+        response = await self._client.post(f"{self._base}/token", params={"grant_type": "refresh_token"},
+                                           json={"refresh_token": refresh_token}, headers=self._headers())
+        if response.status_code >= 400 and response.status_code != 429:
+            raise AuthError(401, "Your login has expired. Log in again.")
+        return self._session(response)
+
+    async def sign_out(self, access_token: str) -> None:
+        """End the session everywhere (Supabase revokes its refresh tokens)."""
+        self._checked.pop(access_token, None)
+        await self._client.post(f"{self._base}/logout", headers=self._headers(access_token))
+
+    async def user_id(self, access_token: str) -> str | None:
+        """The user a valid access token belongs to, or None for an invalid or expired token."""
+        now = time.monotonic()
+        cached = self._checked.get(access_token)
+        if cached and cached[1] > now:
+            return cached[0]
+        response = await self._client.get(f"{self._base}/user", headers=self._headers(access_token))
+        if response.status_code != 200:
+            self._checked.pop(access_token, None)
+            return None
+        user_id = response.json().get("id")
+        if len(self._checked) > 1000:
+            self._checked = {k: v for k, v in self._checked.items() if v[1] > now}
+        if user_id:
+            self._checked[access_token] = (user_id, now + self.CACHE_SECONDS)
+        return user_id
 
     async def aclose(self) -> None:
         """Close the HTTP client."""

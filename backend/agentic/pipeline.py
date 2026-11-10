@@ -1,11 +1,13 @@
-"""invoice_ingest: the code-controlled pipeline from photo to draft invoice (proposal Figure 6).
+"""invoice_ingest: the code-controlled pipeline from photo to draft (proposal Figure 6).
 
     photo -> image clean-up -> InvoiceVisionAgent (+ output guardrail)
-          -> math_audit (Python) -> save draft -> SkuMatchAgent (+ 0.82 gate) -> owner review
+      invoice: -> math_audit (Python) -> save draft -> SkuMatchAgent (+ 0.82 gate) -> owner review
+      receipt: -> one unconfirmed supplier payment per invoice it settles -> owner confirms
 
 The order is fixed in code; there are no LLM handoffs. Nothing is saved when the guardrail trips.
 An invoice that fails the math audit is saved as a draft with math_ok = false and is not matched
-until the owner fixes it (POST /invoices/{id}/fix re-runs the audit).
+until the owner fixes it (POST /invoices/{id}/fix re-runs the audit). Receipt payments always
+start unconfirmed; the owner checks them against the photo and confirms them.
 """
 
 from __future__ import annotations
@@ -14,7 +16,23 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-from database.client import DuplicateError, ExtractionRunLog, Invoice, NewInvoice, NewInvoiceLine
+from database.client import (
+    DuplicateError,
+    ExtractionRunLog,
+    Invoice,
+    InvoiceSummary,
+    NewInvoice,
+    NewInvoiceLine,
+    NewPayment,
+    NotFoundError,
+    SupplierRecord,
+)
+from services.cash_flow_service import (
+    ReceiptUpload,
+    find_duplicate_receipt,
+    payments_saved,
+    with_receipt_links,
+)
 from services.invoice_service import (
     WorkflowError,
     date_issues,
@@ -24,7 +42,8 @@ from services.invoice_service import (
     run_sku_matching,
 )
 
-from .schemas import ExtractedDocument, usable_lines
+from .guardrails import missing_fields as document_missing_fields
+from .schemas import ExtractedDocument, ReceiptChequeDraft, usable_lines
 from .vision_agent import (
     ImagePreprocessError,
     PreparedImages,
@@ -93,19 +112,21 @@ async def _read_photo(services: AppServices, business_id: str, image_bytes: byte
     return images, result
 
 
-async def _store_photos(services: AppServices, business_id: str, invoice_id: str, original: bytes,
-                        content_type: str | None, images: PreparedImages) -> str | None:
-    """Keep the original photo and the cleaned copy in the private bucket; returns the original's path."""
+async def _store_photos(services: AppServices, business_id: str, folder: str, original: bytes,
+                        content_type: str | None, images: PreparedImages, *, invoice_id: str | None = None) -> str | None:
+    """Keep the original photo and the cleaned copy in the private bucket under ``folder`` (the
+    invoice id, or receipts/<payment id>); returns the original's path."""
     if services.storage is None:
         return None
     extension = _EXTENSIONS.get((content_type or "").lower(), ".bin")
-    original_path = f"{business_id}/{invoice_id}/original{extension}"
+    original_path = f"{business_id}/{folder}/original{extension}"
     try:
         await services.storage.put(original_path, original, content_type or "application/octet-stream")
-        await services.storage.put(f"{business_id}/{invoice_id}/clahe.png", images.preview_png, "image/png")
-    except Exception as exc:  # noqa: BLE001 - the invoice is still usable without its photo
-        logger.exception("could not store invoice images")
-        await services.db.log_event(business_id, invoice_id, "image_store_failed", {"error": str(exc)[:300]})
+        await services.storage.put(f"{business_id}/{folder}/clahe.png", images.preview_png, "image/png")
+    except Exception as exc:  # noqa: BLE001 - the invoice or receipt is still usable without its photo
+        logger.exception("could not store document images")
+        await services.db.log_event(business_id, invoice_id, "image_store_failed",
+                                    {"error": str(exc)[:300], "folder": folder})
         return None
     return original_path
 
@@ -145,9 +166,127 @@ def _draft_to_new_invoice(document: ExtractedDocument, supplier_id: str | None, 
     return invoice, lines, audit.ok
 
 
+def _cheque_for(cheques: list[ReceiptChequeDraft], index: int, rows: int) -> ReceiptChequeDraft | None:
+    """The cheque written for the ``index``-th invoice on a receipt: paired one-to-one when the
+    receipt lists as many cheques as invoices, otherwise the first cheque."""
+    if not cheques:
+        return None
+    return cheques[index] if len(cheques) == rows else cheques[0]
+
+
+def _row_fields(low_confidence: list[str], index: int) -> list[str]:
+    """The partly read fields that concern one receipt row (its own values and the receipt header)."""
+    own = f"receipt.payments[{index}]."
+    return [path for path in low_confidence if path.startswith(own) or not path.startswith("receipt.payments[")]
+
+
+async def _receipt_supplier(services: AppServices, business_id: str, document: ExtractedDocument,
+                            given: SupplierRecord | None) -> SupplierRecord | None:
+    """The receipt's supplier: the one the owner chose, else the printed name, else the supplier of
+    the only saved invoices carrying the numbers the receipt lists."""
+    if given is not None:
+        return given
+    name = _clean(document.supplier.name)
+    if name:
+        matches = await services.db.find_suppliers_by_name(business_id, name)
+        if matches:
+            return matches[0]
+    receipt = document.receipt
+    numbers = [n for n in (_clean(p.invoice_number) for p in (receipt.payments if receipt else [])) if n]
+    owners: set[str] = set()
+    for number in numbers:
+        for invoice in await services.db.find_invoices_by_number_any_supplier(business_id, number):
+            if invoice.supplier_id and invoice.status != "rejected":
+                owners.add(invoice.supplier_id)
+    if len(owners) == 1:
+        return await services.db.get_supplier(business_id, owners.pop())
+    return None
+
+
+async def _receipt_payments(services: AppServices, business_id: str, document: ExtractedDocument,
+                            supplier: SupplierRecord | None) -> list[NewPayment]:
+    """One unconfirmed payment per invoice the receipt settles, linked to the saved invoice with
+    that number when there is one (a receipt with no readable line still gives one row to fill in)."""
+    receipt = document.receipt
+    assert receipt is not None
+    paid_on = parse_iso_date(receipt.receipt_date)
+    lines = [p for p in receipt.payments if _clean(p.invoice_number) or p.amount is not None] or [None]
+    rows = []
+    for index, line in enumerate(lines):
+        number = _clean(line.invoice_number) if line else None
+        invoice: InvoiceSummary | None = None
+        if supplier is not None and number:
+            found = await services.db.find_invoice_by_number(business_id, supplier.id, number)
+            invoice = found if found is not None and found.status != "rejected" else None
+        cheque = _cheque_for(receipt.cheques, index, len(lines))
+        method = receipt.payment_method or ("cheque" if cheque and _clean(cheque.cheque_number) else None)
+        amount = line.amount if line and line.amount is not None and 0 < line.amount < 1e10 else None
+        rows.append(NewPayment(
+            supplier_id=supplier.id if supplier else None,
+            supplier_name_raw=_clean(document.supplier.name),
+            invoice_id=invoice.id if invoice else None,
+            invoice_number_raw=None if invoice else number,
+            amount=round(amount, 2) if amount is not None else None,
+            paid_on=paid_on,
+            method=method,
+            receipt_number=_clean(receipt.receipt_number),
+            cheque_number=_clean(cheque.cheque_number) if cheque else None,
+            bank_name=_clean(cheque.bank_name) if cheque else None,
+            cheque_date=parse_iso_date(cheque.cheque_date) if cheque else None,
+            status="unconfirmed",
+            source="agent",
+            low_confidence_fields=_row_fields(document.low_confidence_fields, index),
+        ))
+    return rows
+
+
+async def receipt_ingest(images: PreparedImages, document: ExtractedDocument, *, services: AppServices,
+                         business_id: str, supplier: SupplierRecord | None, image_bytes: bytes,
+                         content_type: str | None, raw_output: dict, duration_ms: int) -> ReceiptUpload:
+    """Save what InvoiceVisionAgent read from a payment receipt as unconfirmed supplier payments.
+
+    A receipt already saved for the same supplier is refused (409). The receipt photo is kept so
+    the owner can check every payment against it before confirming.
+    """
+    db = services.db
+    supplier = await _receipt_supplier(services, business_id, document, supplier)
+    receipt_number = _clean(document.receipt.receipt_number) if document.receipt else None
+    clash = await find_duplicate_receipt(services, business_id, supplier.id if supplier else None,
+                                         receipt_number, any_invoice=True)
+    if clash:
+        await _log_run(services, business_id, guardrail_passed=True, raw_output=raw_output,
+                       error="duplicate receipt", duration_ms=duration_ms)
+        raise WorkflowError(409, "duplicate_receipt", "That receipt is already saved for this supplier.",
+                            payment_id=clash.id)
+
+    rows = await _receipt_payments(services, business_id, document, supplier)
+    try:
+        payments = await db.create_payments(business_id, rows)
+    except NotFoundError as exc:
+        raise WorkflowError(404, "not_found", str(exc)) from exc
+    image_path = await _store_photos(services, business_id, f"receipts/{payments[0].id}", image_bytes,
+                                     content_type, images)
+    if image_path:
+        payments = [await db.update_payment(business_id, payment.id, {"image_path": image_path}) for payment in payments]
+    await _log_run(services, business_id, guardrail_passed=True, raw_output=raw_output, error=None,
+                   duration_ms=duration_ms)
+    await payments_saved(services, business_id, payments, "receipt_extracted",
+                         {"supplier_matched": supplier is not None})
+    payments = await with_receipt_links(services, payments)
+    return ReceiptUpload(
+        receipt_number=receipt_number,
+        supplier_id=supplier.id if supplier else None,
+        supplier_name_raw=_clean(document.supplier.name),
+        missing_fields=document_missing_fields(document),
+        image_url=payments[0].image_url,
+        payments=payments,
+    )
+
+
 async def invoice_ingest(image_bytes: bytes, *, services: AppServices, business_id: str,
-                         supplier_id: str | None = None, content_type: str | None = None) -> Invoice:
-    """Run the whole pipeline for one uploaded photo and return the saved draft invoice."""
+                         supplier_id: str | None = None, content_type: str | None = None) -> Invoice | ReceiptUpload:
+    """Run the whole pipeline for one uploaded photo: the saved draft invoice, or the unconfirmed
+    payments saved from a payment receipt."""
     db = services.db
     supplier = None
     if supplier_id:
@@ -158,11 +297,16 @@ async def invoice_ingest(image_bytes: bytes, *, services: AppServices, business_
     images, result = await _read_photo(services, business_id, image_bytes)
     document = result.document
     raw_output = document.model_dump(by_alias=True)
-    if document.doc_type != "invoice" or document.invoice is None:
-        await _log_run(services, business_id, guardrail_passed=True, raw_output=raw_output, error="receipt upload",
-                       duration_ms=result.duration_ms)
-        raise WorkflowError(422, "unsupported_document",
-                            "This photo looks like a payment receipt. Receipt upload is not supported yet.")
+    if document.doc_type == "receipt" and document.receipt is not None:
+        return await receipt_ingest(images, document, services=services, business_id=business_id, supplier=supplier,
+                                    image_bytes=image_bytes, content_type=content_type, raw_output=raw_output,
+                                    duration_ms=result.duration_ms)
+    if document.invoice is None:
+        await _log_run(services, business_id, guardrail_passed=False, raw_output=raw_output,
+                       error="no invoice in the answer", duration_ms=result.duration_ms)
+        raise WorkflowError(422, "reading_unsuccessful",
+                            "Reading unsuccessful - nothing usable was read. Retake the photo or type it in.",
+                            missing_fields=["invoice.lines", "invoice.invoice_date"])
 
     if supplier is None and _clean(document.supplier.name):
         matches = await db.find_suppliers_by_name(business_id, document.supplier.name or "")
@@ -184,7 +328,8 @@ async def invoice_ingest(image_bytes: bytes, *, services: AppServices, business_
     except DuplicateError as exc:
         raise WorkflowError(409, "duplicate_invoice", "That invoice number is already saved for this supplier.") from exc
 
-    image_path = await _store_photos(services, business_id, invoice.id, image_bytes, content_type, images)
+    image_path = await _store_photos(services, business_id, invoice.id, image_bytes, content_type, images,
+                                     invoice_id=invoice.id)
     if image_path:
         invoice = await db.update_invoice(business_id, invoice.id, {"image_path": image_path})
     await _log_run(services, business_id, invoice_id=invoice.id, guardrail_passed=True, raw_output=raw_output,

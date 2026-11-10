@@ -11,17 +11,20 @@ import psycopg
 import pytest
 
 from database.client import (
+    AuthError,
     DuplicateError,
     ExtractionRunLog,
     InvoiceQuery,
     LineMatchUpdate,
     NewInvoice,
     NewInvoiceLine,
+    NewPayment,
     NewProduct,
     NewSupplier,
     NotFoundError,
     RepositoryError,
     StorageError,
+    SupabaseAuth,
     SupabaseStorage,
 )
 from tests.conftest import BIZ, SQL_FILES, HashingEmbedder, reset_database, run_sql
@@ -213,6 +216,47 @@ async def test_logs(db, pg_url, other_business):
     assert run_sql(pg_url, "select agent, raw_output->>'doc_type' from extraction_runs") == [("InvoiceVisionAgent", "invoice")]
 
 
+@pytest.mark.postgres
+@pytest.mark.anyio
+async def test_supplier_payments(db, pg_url, other_business):
+    """Payments are saved together, read back with names, filtered, updated and kept per business."""
+    supplier = await db.create_supplier(BIZ, NewSupplier(name="Lanka Pipe Traders"))
+    invoice = await db.create_invoice(BIZ, NewInvoice(supplier_id=supplier.id, invoice_number="A-1", total=900.0), [])
+    saved = await db.create_payments(BIZ, [
+        NewPayment(supplier_id=supplier.id, invoice_id=invoice.id, amount=500.0, paid_on=date(2026, 10, 2),
+                   receipt_number="R-1", method="cheque", cheque_number="001", source="agent",
+                   low_confidence_fields=["receipt.payments[0].amount"]),
+        NewPayment(supplier_id=supplier.id, invoice_number_raw="A-9", amount=None, receipt_number="R-1", source="agent"),
+    ])
+    assert [(p.supplier_name, p.invoice_number, p.status, p.reminder_due) for p in saved] == [
+        ("Lanka Pipe Traders", "A-1", "unconfirmed", False), ("Lanka Pipe Traders", None, "unconfirmed", False)]
+    assert saved[0].low_confidence_fields == ["receipt.payments[0].amount"] and saved[1].amount is None
+    assert len(await db.list_payments(BIZ, receipt_number="R-1")) == 2
+    assert [p.id for p in await db.list_payments(BIZ, invoice_id=invoice.id)] == [saved[0].id]
+    assert await db.list_payments(OTHER) == [] and await db.get_payment(OTHER, saved[0].id) is None
+
+    confirmed = await db.update_payment(BIZ, saved[0].id, {"status": "confirmed"})
+    assert confirmed.status == "confirmed" and confirmed.updated_at >= saved[0].updated_at
+    assert (await db.get_invoice(BIZ, invoice.id)).amount_paid == 500.0
+    assert [p.id for p in await db.list_payments(BIZ, status="unconfirmed")] == [saved[1].id]
+    with pytest.raises(RepositoryError):
+        await db.update_payment(BIZ, saved[0].id, {"business_id": OTHER})
+    with pytest.raises(NotFoundError):
+        await db.update_payment(OTHER, saved[0].id, {"amount": 1.0})
+    with pytest.raises(NotFoundError):
+        await db.create_payments(OTHER, [NewPayment(supplier_id=supplier.id, amount=1.0)])
+    with pytest.raises(NotFoundError):
+        await db.update_payment(BIZ, saved[1].id, {"invoice_id": MISSING})
+
+    run_sql(pg_url, "update supplier_payments set created_at = now() - interval '3 days' where id = %s", (saved[1].id,))
+    old = await db.get_payment(BIZ, saved[1].id)
+    assert old.reminder_due and old.reminder_sent_at is None
+    await db.mark_reminders_sent(BIZ, [old.id])
+    first = (await db.get_payment(BIZ, old.id)).reminder_sent_at
+    await db.mark_reminders_sent(BIZ, [old.id])
+    assert first is not None and (await db.get_payment(BIZ, old.id)).reminder_sent_at == first
+
+
 # ---- the SQL files -----------------------------------------------------------------------------
 # Roughly what the first prototype's Supabase project has today (inferred from its frontend).
 LEGACY_SCHEMA = """
@@ -274,6 +318,32 @@ def test_upgrades_the_prototype_database(pg_server_url):
         conn.execute("insert into invoices (supplier_name_raw) values ('Unknown Co')")  # supplier may now be empty
         with pytest.raises(psycopg.errors.UniqueViolation):
             conn.execute("insert into invoices (supplier_id, invoice_number) values ('11111111-1111-1111-1111-111111111111', 'INV-1')")
+
+
+@pytest.mark.postgres
+def test_upgrades_an_older_supplier_payments_table(pg_server_url):
+    """A project that ran the earlier schema gets nullable supplier/amount, the new columns and 'rejected'."""
+    reset_database(pg_server_url, sql_files=[])
+    with psycopg.connect(pg_server_url, autocommit=True) as conn:
+        _run_all(conn)
+        conn.execute("drop table supplier_payments")
+        conn.execute(
+            "create table supplier_payments (id uuid primary key default gen_random_uuid(), "
+            "business_id uuid not null default '00000000-0000-0000-0000-000000000001' references businesses(id), "
+            "supplier_id uuid not null references suppliers(id), invoice_id uuid references invoices(id), "
+            "amount numeric(12, 2) not null check (amount > 0), paid_on date, method text, receipt_number text, "
+            "cheque_number text, bank_name text, cheque_date date, status text not null default 'unconfirmed' "
+            "check (status in ('confirmed', 'unconfirmed')), reminder_sent_at timestamptz, "
+            "created_at timestamptz not null default now())"
+        )
+        _run_all(conn)
+        conn.execute("insert into supplier_payments (status, source, invoice_number_raw) values ('rejected', 'agent', 'X-1')")
+        assert conn.execute("select amount, supplier_id, low_confidence_fields from supplier_payments").fetchone() == (None, None, [])
+        for sql in ("insert into supplier_payments (status) values ('maybe')",
+                    "insert into supplier_payments (amount) values (0)",
+                    "insert into supplier_payments (source) values ('robot')"):
+            with pytest.raises(psycopg.errors.CheckViolation):
+                conn.execute(sql)
 
 
 @pytest.mark.postgres
@@ -360,3 +430,70 @@ async def test_storage_keys_and_failures():
     with pytest.raises(StorageError, match="Bucket not found"):
         await failing.put("a.png", b"x", "image/png")
     assert await failing.signed_url("missing.png") is None
+
+
+@pytest.mark.anyio
+async def test_supabase_auth_client():
+    """Sign-in, refresh and sign-out go to Supabase Auth with the server key; tokens are checked
+    there and remembered briefly; refusals become a plain message."""
+    seen = []
+    user = {"id": "aaaaaaaa-0000-0000-0000-00000000000a", "email": "owner@example.com"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """Answer like Supabase Auth."""
+        seen.append(request)
+        path, grant = request.url.path, request.url.params.get("grant_type")
+        if path.endswith("/token") and grant == "password":
+            body = json.loads(request.content)
+            if body["password"] == "right":
+                return httpx.Response(200, json={"access_token": "a1", "refresh_token": "r1", "expires_in": 3600, "user": user})
+            if body["password"] == "flood":
+                return httpx.Response(429, json={"msg": "rate limited"})
+            return httpx.Response(400, json={"error": "invalid_grant"})
+        if path.endswith("/token") and grant == "refresh_token":
+            if json.loads(request.content)["refresh_token"] == "r1":
+                return httpx.Response(200, json={"access_token": "a2", "refresh_token": "r2", "expires_in": 3600, "user": user})
+            return httpx.Response(400, json={"error": "invalid_grant"})
+        if path.endswith("/user"):
+            return (httpx.Response(200, json=user) if request.headers["authorization"] in ("Bearer a1", "Bearer a2")
+                    else httpx.Response(401, json={}))
+        if path.endswith("/logout"):
+            return httpx.Response(204)
+        return httpx.Response(404)
+
+    auth = SupabaseAuth(url=URL, api_key="sb_secret_test", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    session = await auth.sign_in("owner@example.com", "right")
+    assert (session.access_token, session.refresh_token, session.user_id) == ("a1", "r1", user["id"])
+    assert str(seen[0].url) == f"{URL}/auth/v1/token?grant_type=password"
+    assert seen[0].headers["apikey"] == "sb_secret_test" and "authorization" not in seen[0].headers
+    for password, status in (("wrong", 401), ("flood", 429)):
+        with pytest.raises(AuthError) as refused:
+            await auth.sign_in("owner@example.com", password)
+        assert refused.value.status_code == status
+    assert (await auth.refresh("r1")).access_token == "a2"
+    with pytest.raises(AuthError):
+        await auth.refresh("stolen")
+
+    calls = len(seen)
+    assert await auth.user_id("a1") == user["id"] and await auth.user_id("a1") == user["id"]
+    assert len(seen) == calls + 1  # the second check came from memory
+    assert await auth.user_id("forged") is None
+    await auth.sign_out("a1")
+    assert seen[-1].url.path.endswith("/logout") and seen[-1].headers["authorization"] == "Bearer a1"
+    assert await auth.user_id("a1") == user["id"] and len(seen) == calls + 4  # checked with Supabase again
+    await auth.aclose()
+
+
+@pytest.mark.postgres
+@pytest.mark.anyio
+async def test_mrp_style_lines_read_their_net_price(db, pg_url):
+    """Lines typed in the newer style (MRP + discount %, mro left at 0) show the rate actually paid."""
+    supplier = await db.create_supplier(BIZ, NewSupplier(name="Lanka Pipe Traders"))
+    invoice = await db.create_invoice(BIZ, NewInvoice(supplier_id=supplier.id, invoice_number="M-1", total=700.0,
+                                                      status="verified"),
+                                      lines(("63mm uPVC pipe", 2, 300.0), ("Elbow", 1, 100.0)))
+    run_sql(pg_url, "update invoice_items set mro = 0, mrp = 400, discount_rate = 25, net_price = 300, line_total = 600 "
+                    "where item_name = '63mm uPVC pipe'")
+    loaded = await db.get_invoice(BIZ, invoice.id)
+    assert [(line.item_name, line.unit_rate) for line in loaded.lines] == [("63mm uPVC pipe", 300.0), ("Elbow", 100.0)]
+    assert sorted(l.unit_rate for l in await db.list_supplier_lines(BIZ, supplier.id)) == [100.0, 300.0]

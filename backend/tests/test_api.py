@@ -8,7 +8,19 @@ from datetime import date, timedelta
 
 import pytest
 
-from tests.conftest import BASE_SETTINGS, JPEG, SUPPLIER, Harness, invoice_doc, invoice_line, receipt_doc
+from tests.conftest import (
+    BASE_SETTINGS,
+    BIZ,
+    JPEG,
+    OWNER_EMAIL,
+    OWNER_PASSWORD,
+    SUPPLIER,
+    Harness,
+    add_login,
+    invoice_doc,
+    invoice_line,
+    receipt_doc,
+)
 
 pytestmark = pytest.mark.postgres
 MISSING = "99999999-9999-9999-9999-999999999999"
@@ -38,7 +50,8 @@ def typed_invoice(supplier_id: str, **overrides) -> dict:
 # ---- health and upload -------------------------------------------------------------------------
 def test_health(h):
     """The API is up and reports what is configured."""
-    assert h.client.get("/health").json() == {"ok": True, "database": "postgres", "openai_configured": False, "image_storage": True}
+    assert h.client.get("/health", headers={"Authorization": ""}).json() == {
+        "ok": True, "database": "postgres", "openai_configured": False, "image_storage": True, "login_required": True}
 
 
 def test_upload_matches_saves_and_verifies(h):
@@ -66,19 +79,19 @@ def test_upload_matches_saves_and_verifies(h):
 
 
 def test_upload_refusals(h):
-    """Unreadable photo, receipt, model outage and broken files: refused, nothing saved."""
+    """Unreadable photo, empty receipt, model outage and broken files: refused, nothing saved."""
     guardrail = h.upload(invoice_doc(date=None))
     assert guardrail.status_code == 422 and guardrail.json()["error_type"] == "reading_unsuccessful"
     assert guardrail.json()["missing_fields"][0] == "invoice.invoice_date"
-    receipt = h.upload(receipt_doc())
-    assert receipt.status_code == 422 and receipt.json()["error_type"] == "unsupported_document"
+    blank = h.upload(receipt_doc(number=None, payments=[(None, None)]))
+    assert blank.status_code == 422 and blank.json()["missing_fields"] == ["receipt.payments", "receipt.receipt_number"]
     outage = h.upload(RuntimeError("openai down"))
     assert outage.status_code == 502 and outage.json()["error_type"] == "api_error"
     broken = h.client.post("/invoices/upload", files={"file": ("x.jpg", b"garbage", "image/jpeg")})
     assert broken.status_code == 422 and broken.json()["missing_fields"] == ["image"]
     assert h.client.post("/invoices/upload", files={"file": ("a.txt", b"hello", "text/plain")}).status_code == 415
-    assert h.sql("select count(*) from invoices") == [(0,)]
-    assert h.sql("select guardrail_passed from extraction_runs order by created_at") == [(False,), (True,), (None,)]
+    assert h.sql("select count(*) from invoices") == [(0,)] and h.sql("select count(*) from supplier_payments") == [(0,)]
+    assert h.sql("select guardrail_passed from extraction_runs order by created_at") == [(False,), (False,), (None,)]
 
 
 def test_upload_size_limit_and_no_storage(make_harness):
@@ -284,7 +297,9 @@ def test_suppliers_products_and_profile(h):
     profile = h.client.get(f"/suppliers/{supplier['id']}/profile").json()
     assert profile["supplier"]["name"] == "Ceylon Paints"
     assert profile["totals"] == {"invoice_count": 2, "draft_count": 1, "verified_total": 900.0, "outstanding": 900.0,
-                                 "next_due_date": "2026-10-16"}
+                                 "next_due_date": "2026-10-16", "paid_total": 0.0, "unconfirmed_total": 0.0,
+                                 "unconfirmed_count": 0}
+    assert profile["payments"] == []
     assert [i["invoice_number"] for i in profile["invoices"]] == ["P-2", "P-1"]
     assert [(l["invoice_number"], l["item_name"], l["mro"], l["product_name"]) for l in profile["lines"]] == [
         ("P-1", "Wall Paint 4L", 450.0, "Wall Paint 4L")]
@@ -394,3 +409,336 @@ def test_invoice_number_search_is_literal(h):
     h.client.post("/invoices", json=typed_invoice(supplier["id"], invoice_number="TX100"))
     assert h.client.get("/invoices", params={"invoice_number": "%"}).json() == []
     assert [i["invoice_number"] for i in h.client.get("/invoices", params={"invoice_number": "T_"}).json()] == ["T_100"]
+
+
+# ---- supplier payments and receipts ---------------------------------------------------------
+def verified_invoice(h: Harness, supplier_id: str, number: str, total: float = 6750.0, day: str = "2026-10-21") -> dict:
+    """A typed-in invoice that is verified (its two products exist, so both lines link)."""
+    for name in ("63mm uPVC pipe", "PVC solvent cement 250ml"):
+        if not any(p["name"] == name for p in h.client.get("/products").json()):
+            h.product(name)
+    lines = [{"item_name": "63mm uPVC pipe", "quantity": 1, "mro": total - 100, "line_total": total - 100},
+             {"item_name": "PVC solvent cement 250ml", "quantity": 1, "mro": 100.0, "line_total": 100.0}]
+    invoice = h.client.post("/invoices", json={"supplier_id": supplier_id, "invoice_number": number,
+                                               "invoice_date": day, "total": total, "lines": lines}).json()
+    verified = h.client.post(f"/invoices/{invoice['id']}/verify")
+    assert verified.status_code == 200, verified.text
+    return verified.json()
+
+
+def invoice_state(h: Harness, invoice_id: str) -> tuple[str, float]:
+    """An invoice's payment status and the confirmed amount paid against it."""
+    invoice = h.client.get(f"/invoices/{invoice_id}").json()
+    return invoice["payment_status"], invoice["amount_paid"]
+
+
+def test_receipt_upload_is_saved_and_confirming_marks_the_invoice_paid(h):
+    """A receipt photo becomes an unconfirmed payment linked to its invoice; confirming pays it."""
+    supplier = h.supplier()
+    invoice = verified_invoice(h, supplier["id"], "INV-1001")
+    response = h.upload(receipt_doc(low_confidence=["receipt.payments[0].amount"]))
+    assert response.status_code == 201, response.text
+    receipt = response.json()
+    assert (receipt["document_type"], receipt["receipt_number"], receipt["supplier_id"]) == ("receipt", "R-77", supplier["id"])
+    [payment] = receipt["payments"]
+    assert (payment["status"], payment["source"], payment["invoice_id"], payment["invoice_number"]) == (
+        "unconfirmed", "agent", invoice["id"], "INV-1001")
+    assert (payment["amount"], payment["paid_on"], payment["method"]) == (6750.0, "2026-10-22", "cash")
+    assert payment["low_confidence_fields"] == ["receipt.payments[0].amount"]
+    assert payment["image_url"] == receipt["image_url"] == f"memory://{payment['image_path']}"
+    assert payment["image_path"].endswith(f"receipts/{payment['id']}/original.jpg")
+    assert invoice_state(h, invoice["id"]) == ("unconfirmed", 0.0)
+    assert h.sql("select guardrail_passed, invoice_id from extraction_runs") == [(True, None)]
+
+    again = h.upload(receipt_doc())
+    assert again.status_code == 409 and again.json()["payment_id"] == payment["id"]
+
+    confirmed = h.client.post(f"/payments/{payment['id']}/confirm")
+    assert confirmed.status_code == 200 and confirmed.json()["status"] == "confirmed" and confirmed.json()["confirmed_at"]
+    assert invoice_state(h, invoice["id"]) == ("paid", 6750.0)
+    assert h.client.post(f"/payments/{payment['id']}/confirm").json()["error_type"] == "already_confirmed"
+    assert events(h, invoice["id"])[-4:] == ["receipt_extracted", "payment_status_updated", "payment_confirmed",
+                                             "payment_status_updated"]
+    profile = h.client.get(f"/suppliers/{supplier['id']}/profile").json()
+    assert (profile["totals"]["outstanding"], profile["totals"]["paid_total"], profile["totals"]["unconfirmed_count"]) == (0.0, 6750.0, 0)
+    assert [p["id"] for p in profile["payments"]] == [payment["id"]] and profile["payments"][0]["image_url"]
+    assert h.client.get(f"/payments/{payment['id']}").json()["image_url"] == payment["image_url"]
+    assert h.client.get("/invoices", params={"payment_status": "paid"}).json()[0]["amount_paid"] == 6750.0
+
+
+def test_receipt_settling_several_invoices_part_payment_and_unknown_number(h):
+    """One row per invoice; a part payment leaves the rest owed; an unsaved invoice number blocks confirming."""
+    supplier = h.supplier()
+    first = verified_invoice(h, supplier["id"], "T-1")
+    second = verified_invoice(h, supplier["id"], "T-2")
+    cheque = {"cheque_number": "004512", "bank_name": "Example Bank", "cheque_date": "2026-10-23"}
+    receipt = h.upload(receipt_doc(method=None, payments=[("T-1", 6750.0), ("T-2", 3000.0), ("T-9", 500.0)],
+                                   cheques=[cheque])).json()
+    rows = {p["invoice_number"] or p["invoice_number_raw"]: p for p in receipt["payments"]}
+    assert set(rows) == {"T-1", "T-2", "T-9"} and rows["T-9"]["invoice_id"] is None
+    assert {(p["method"], p["cheque_number"], p["bank_name"], p["cheque_date"]) for p in rows.values()} == {
+        ("cheque", "004512", "Example Bank", "2026-10-23")}
+    assert len({p["image_path"] for p in rows.values()}) == 1
+
+    assert h.client.post(f"/payments/{rows['T-2']['id']}/confirm").status_code == 200
+    assert invoice_state(h, second["id"]) == ("unpaid", 3000.0)
+    blocked = h.client.post(f"/payments/{rows['T-9']['id']}/confirm")
+    assert blocked.status_code == 409 and "T-9" in blocked.json()["reasons"][0]
+    assert h.client.post(f"/payments/{rows['T-9']['id']}/reject", json={"reason": ""}).status_code == 422
+    rejected = h.client.post(f"/payments/{rows['T-9']['id']}/reject", json={"reason": "No such invoice"})
+    assert rejected.json()["status"] == "rejected"
+    assert h.client.post(f"/payments/{rows['T-9']['id']}/confirm").status_code == 409
+
+    totals = h.client.get(f"/suppliers/{supplier['id']}/profile").json()["totals"]
+    assert (totals["outstanding"], totals["paid_total"], totals["unconfirmed_total"], totals["unconfirmed_count"]) == (
+        10500.0, 3000.0, 6750.0, 1)
+    assert h.client.post(f"/payments/{rows['T-1']['id']}/confirm").status_code == 200
+    assert invoice_state(h, first["id"]) == ("paid", 6750.0)
+    assert h.client.get(f"/suppliers/{supplier['id']}/profile").json()["totals"]["outstanding"] == 3750.0
+    assert [p["status"] for p in h.client.get("/payments", params={"supplier_id": supplier["id"]}).json()].count("confirmed") == 2
+
+
+def test_receipt_supplier_found_from_invoice_number_chosen_or_picked_later(h):
+    """No supplier name: the invoice number finds it. Unknown: it waits; the owner picks it and confirms."""
+    supplier = h.supplier()
+    other = h.supplier("Ceylon Paints")
+    invoice = verified_invoice(h, supplier["id"], "INV-5")
+    found = h.upload(receipt_doc(supplier=None, number="R-1", payments=[("INV-5", 1000.0)])).json()
+    assert found["supplier_id"] == supplier["id"] and found["payments"][0]["invoice_id"] == invoice["id"]
+
+    chosen = h.upload(receipt_doc(supplier="Lanka Pipe Traders", number="R-2", payments=[("P-1", 50.0)]),
+                      supplier_id=other["id"]).json()
+    assert chosen["supplier_id"] == other["id"] and chosen["payments"][0]["invoice_number_raw"] == "P-1"
+
+    unknown = h.upload(receipt_doc(supplier="Brand New Hardware Co", number="R-3", payments=[("Z-1", 250.0)])).json()
+    [waiting] = unknown["payments"]
+    assert unknown["supplier_id"] is None and waiting["supplier_name_raw"] == "Brand New Hardware Co"
+    reasons = h.client.post(f"/payments/{waiting['id']}/confirm").json()["reasons"]
+    assert reasons[0] == "Pick the supplier."
+    mismatch = h.client.post(f"/payments/{waiting['id']}/fix", json={"supplier_id": other["id"], "invoice_id": invoice["id"]})
+    assert mismatch.status_code == 409 and mismatch.json()["error_type"] == "supplier_mismatch"
+    fixed = h.client.post(f"/payments/{waiting['id']}/fix", json={"supplier_id": None, "invoice_id": invoice["id"]}).json()
+    assert (fixed["supplier_id"], fixed["invoice_id"], fixed["invoice_number_raw"]) == (supplier["id"], invoice["id"], None)
+    assert h.client.post(f"/payments/{waiting['id']}/confirm").status_code == 200
+    assert invoice_state(h, invoice["id"]) == ("unconfirmed", 250.0)  # the R-1 payment still waits
+
+    nameless = h.upload(receipt_doc(supplier=None, number="R-4", payments=[("NOPE", 10.0)])).json()
+    assert nameless["supplier_id"] is None and nameless["payments"][0]["invoice_number_raw"] == "NOPE"
+    assert h.sql("select count(*) from supplier_payments") == [(4,)]
+
+
+def test_typed_in_payment_record_fix_confirm_and_reject(h):
+    """A payment typed in by hand follows the same rules as one read from a receipt."""
+    supplier = h.supplier()
+    other = h.supplier("Ceylon Paints")
+    invoice = verified_invoice(h, supplier["id"], "M-1", total=1000.0)
+    draft = h.client.post("/invoices", json=typed_invoice(supplier["id"], invoice_number="M-2")).json()
+    base = {"supplier_id": supplier["id"], "invoice_id": invoice["id"], "amount": 400.0, "paid_on": "2026-10-25",
+            "method": "cash", "receipt_number": " R-10 "}
+
+    for bad, status in (({"amount": 0}, 422), ({"amount": -5}, 422), ({"paid_on": None}, 422),
+                        ({"method": "barter"}, 422), ({"supplier_id": MISSING, "invoice_id": None}, 404), ({"invoice_id": MISSING}, 404),
+                        ({"supplier_id": other["id"]}, 409)):
+        assert h.client.post("/payments", json={**base, **bad}).status_code == status, bad
+    rejected_invoice = h.client.post("/invoices", json=typed_invoice(supplier["id"], invoice_number="M-3")).json()
+    h.client.post(f"/invoices/{rejected_invoice['id']}/reject", json={"reason": "duplicate"})
+    assert h.client.post("/payments", json={**base, "invoice_id": rejected_invoice["id"]}).json()["error_type"] == "invoice_rejected"
+
+    saved = h.client.post("/payments", json=base)
+    assert saved.status_code == 201, saved.text
+    payment = saved.json()
+    assert (payment["status"], payment["source"], payment["receipt_number"]) == ("unconfirmed", "manual", "R-10")
+    assert invoice_state(h, invoice["id"]) == ("unconfirmed", 0.0)
+    assert h.client.post("/payments", json=base).json()["error_type"] == "duplicate_payment"
+
+    on_draft = h.client.post("/payments", json={**base, "invoice_id": draft["id"], "receipt_number": None, "confirm": True})
+    assert on_draft.status_code == 409 and on_draft.json()["reasons"] == ["Verify invoice M-2 first."]
+    too_much = h.client.post("/payments", json={**base, "receipt_number": "R-11", "amount": 5000.0, "confirm": True})
+    assert "more than" in too_much.json()["reasons"][0]
+    future = h.client.post("/payments", json={**base, "receipt_number": "R-12", "paid_on": "2030-01-01", "confirm": True})
+    assert "future" in future.json()["reasons"][0]
+    assert h.sql("select count(*) from supplier_payments") == [(1,)]  # refused ones saved nothing
+
+    now = h.client.post("/payments", json={**base, "receipt_number": "R-13", "amount": 600.0, "confirm": True})
+    assert now.status_code == 201 and now.json()["status"] == "confirmed"
+    assert invoice_state(h, invoice["id"]) == ("unconfirmed", 600.0)
+    assert h.client.post(f"/payments/{payment['id']}/confirm").status_code == 200
+    assert invoice_state(h, invoice["id"]) == ("paid", 1000.0)
+
+    assert h.client.post(f"/payments/{payment['id']}/reject", json={"reason": "x"}).status_code == 409
+    fixed = h.client.post(f"/payments/{payment['id']}/fix", json={"amount": 300.0, "bank_name": "  "}).json()
+    assert (fixed["status"], fixed["amount"], fixed["confirmed_at"], fixed["bank_name"]) == ("unconfirmed", 300.0, None, None)
+    assert invoice_state(h, invoice["id"]) == ("unconfirmed", 600.0)
+    assert h.client.post(f"/payments/{payment['id']}/fix", json={"amount": 0}).status_code == 422
+    assert h.client.post(f"/payments/{payment['id']}/reject", json={"reason": "Typed twice"}).json()["status"] == "rejected"
+    assert invoice_state(h, invoice["id"]) == ("unpaid", 600.0)
+    back = h.client.post(f"/payments/{payment['id']}/fix", json={"amount": 400.0}).json()
+    assert back["status"] == "unconfirmed"
+    assert h.client.post(f"/payments/{MISSING}/confirm").status_code == 404
+    assert h.client.post(f"/payments/{MISSING}/fix", json={}).status_code == 404
+    assert h.client.get("/payments/not-a-uuid").status_code == 422
+    assert [e for e in events(h, invoice["id"]) if e.startswith("payment_")][:3] == [
+        "payment_recorded", "payment_status_updated", "payment_recorded"]
+
+
+def test_payment_reminder_after_two_days_and_dashboard(h):
+    """A payment waiting more than two days is a reminder on the dashboard; it stays unconfirmed."""
+    supplier = h.supplier(credit_days=10)
+    invoice = verified_invoice(h, supplier["id"], "D-1", total=1000.0, day=(date.today() - timedelta(days=5)).isoformat())
+    payment = h.client.post("/payments", json={"supplier_id": supplier["id"], "invoice_id": invoice["id"], "amount": 400.0,
+                                               "paid_on": date.today().isoformat(), "confirm": True}).json()
+    waiting = h.client.post("/payments", json={"supplier_id": supplier["id"], "amount": 50.0,
+                                               "paid_on": date.today().isoformat()}).json()
+    dash = h.client.get("/dashboard").json()
+    assert (dash["unconfirmed_payments"], dash["payment_reminders"]) == (1, [])
+    [due] = dash["payments_due"]
+    assert (due["total"], due["amount_paid"], due["still_owed"]) == (1000.0, 400.0, 600.0)
+
+    h.sql("update supplier_payments set created_at = now() - interval '3 days' where id = %s", (waiting["id"],))
+    [reminder] = h.client.get("/dashboard").json()["payment_reminders"]
+    assert reminder["id"] == waiting["id"] and reminder["reminder_due"] is True
+    assert h.sql("select status, reminder_sent_at is not null from supplier_payments where id = %s", (waiting["id"],)) == [
+        ("unconfirmed", True)]
+    assert [p["id"] for p in h.client.get("/payments", params={"status": "unconfirmed"}).json()] == [waiting["id"]]
+    assert h.client.get("/payments", params={"status": "maybe"}).status_code == 422
+    assert payment["status"] == "confirmed"
+
+
+def test_reverifying_an_invoice_re_works_out_its_payment_status(h):
+    """A paid invoice corrected to a larger total is no longer paid once verified again."""
+    supplier = h.supplier()
+    invoice = verified_invoice(h, supplier["id"], "V-1", total=1000.0)
+    h.client.post("/payments", json={"supplier_id": supplier["id"], "invoice_id": invoice["id"], "amount": 1000.0,
+                                     "paid_on": "2026-10-25", "confirm": True})
+    assert invoice_state(h, invoice["id"]) == ("paid", 1000.0)
+    lines = [{"item_name": "63mm uPVC pipe", "quantity": 1, "mro": 1100.0, "line_total": 1100.0},
+             {"item_name": "PVC solvent cement 250ml", "quantity": 1, "mro": 100.0, "line_total": 100.0}]
+    h.client.post(f"/invoices/{invoice['id']}/fix", json={"total": 1200.0, "lines": lines})
+    verified = h.client.post(f"/invoices/{invoice['id']}/verify").json()
+    assert (verified["status"], verified["payment_status"], verified["amount_paid"]) == ("verified", "unpaid", 1000.0)
+    # Marking paid by hand still works (e.g. the rest was paid without a receipt).
+    assert h.client.post(f"/invoices/{invoice['id']}/payment", json={"payment_status": "paid"}).json()["payment_status"] == "paid"
+
+
+# ---- owner login ------------------------------------------------------------------------------
+DATA_ROUTES = ["/dashboard", "/invoices", "/suppliers", "/products", "/payments",
+               f"/suppliers/{MISSING}/profile", f"/invoices/{MISSING}"]
+
+
+def test_every_data_route_needs_a_login(h):
+    """No token or a bad token gets nothing; /health and the login itself stay open."""
+    h.supplier()
+    for path in DATA_ROUTES:
+        anonymous = h.client.get(path, headers={"Authorization": ""})
+        assert anonymous.status_code == 401 and anonymous.json()["error_type"] == "not_logged_in", path
+        forged = h.client.get(path, headers={"Authorization": "Bearer made-up-token"})
+        assert forged.status_code == 401 and forged.json()["error_type"] == "session_expired", path
+    for method, path in (("post", "/suppliers"), ("post", "/payments"), ("post", "/invoices/upload")):
+        assert getattr(h.client, method)(path, headers={"Authorization": ""}).status_code == 401, path
+    assert h.client.get("/suppliers", headers={"Authorization": "Basic abc"}).status_code == 401
+    assert h.client.get("/health", headers={"Authorization": ""}).status_code == 200
+    assert len(h.client.get("/suppliers").json()) == 1  # the logged-in owner sees the data
+
+
+def test_login_refresh_and_logout(h):
+    """The owner logs in with email and password, renews the session, and logs out."""
+    no_header = {"Authorization": ""}
+    wrong = h.client.post("/auth/login", json={"email": OWNER_EMAIL, "password": "nope"}, headers=no_header)
+    assert wrong.status_code == 401 and wrong.json() == {"error_type": "login_failed", "message": "Email or password is incorrect."}
+    assert h.client.post("/auth/login", json={"email": "someone@example.com", "password": OWNER_PASSWORD}, headers=no_header).status_code == 401
+    assert h.client.post("/auth/login", json={"email": OWNER_EMAIL}, headers=no_header).status_code == 422
+
+    login = h.client.post("/auth/login", json={"email": f"  {OWNER_EMAIL} ", "password": OWNER_PASSWORD}, headers=no_header)
+    assert login.status_code == 200, login.text
+    session = login.json()
+    assert (session["business_id"], session["business_name"], session["email"], session["expires_in"]) == (
+        BIZ, "Hardware shop", OWNER_EMAIL, 3600)
+    as_owner = {"Authorization": f"Bearer {session['access_token']}"}
+    assert h.client.get("/invoices", headers=as_owner).status_code == 200
+
+    renewed = h.client.post("/auth/refresh", json={"refresh_token": session["refresh_token"]}, headers=no_header).json()
+    assert renewed["access_token"] != session["access_token"] and renewed["business_id"] == BIZ
+    reused = h.client.post("/auth/refresh", json={"refresh_token": session["refresh_token"]}, headers=no_header)
+    assert reused.status_code == 401 and reused.json()["error_type"] == "session_expired"
+
+    new_owner = {"Authorization": f"Bearer {renewed['access_token']}"}
+    assert h.client.post("/auth/logout", headers=new_owner).json() == {"ok": True}
+    assert h.client.get("/invoices", headers=new_owner).status_code == 401
+    assert h.client.post("/auth/logout", headers=no_header).status_code == 200  # nothing to end
+
+
+def test_a_login_not_linked_to_a_shop_sees_nothing(h):
+    """A Supabase account that is not in business_users cannot log in or read anything."""
+    stranger = "bbbbbbbb-0000-0000-0000-00000000000b"
+    h.auth.add_account("stranger@example.com", "pw-123456", stranger)
+    add_login(h.pg_url, stranger, "stranger@example.com", business_id=None)
+    refused = h.client.post("/auth/login", json={"email": "stranger@example.com", "password": "pw-123456"},
+                            headers={"Authorization": ""})
+    assert refused.status_code == 403 and refused.json()["error_type"] == "no_business"
+    h.auth.tokens["stranger-token"] = stranger
+    assert h.client.get("/invoices", headers={"Authorization": "Bearer stranger-token"}).status_code == 403
+
+
+def test_each_login_reads_only_its_own_shop(h):
+    """Rows are read and written for the logged-in owner's business only."""
+    other_shop, other_owner = "00000000-0000-0000-0000-000000000002", "cccccccc-0000-0000-0000-00000000000c"
+    h.sql("insert into businesses (id, name) values (%s, 'Other test shop')", (other_shop,))
+    add_login(h.pg_url, other_owner, "other@example.com", business_id=other_shop)
+    h.auth.tokens["other-token"] = other_owner
+    other = {"Authorization": "Bearer other-token"}
+    mine = h.supplier()
+    assert h.client.get("/suppliers", headers=other).json() == []
+    assert h.client.get(f"/suppliers/{mine['id']}", headers=other).status_code == 404
+    theirs = h.client.post("/suppliers", json={"name": "Their Supplier"}, headers=other).json()
+    assert theirs["business_id"] == other_shop
+    assert [s["name"] for s in h.client.get("/suppliers").json()] == [SUPPLIER]
+
+
+def test_login_switched_off_uses_the_default_shop(make_harness):
+    """AUTH_REQUIRED=false (local tests only): no token needed, the default business is used."""
+    h = make_harness(settings=replace(BASE_SETTINGS, auth_required=False))
+    assert h.client.get("/suppliers", headers={"Authorization": ""}).status_code == 200
+    assert h.client.get("/health").json()["login_required"] is False
+
+
+def test_startup_refuses_login_without_supabase(pg_url):
+    """With login required but no Supabase project configured, the API does not start."""
+    from fastapi.testclient import TestClient
+
+    from database.client import Database
+    from main import build_services, create_app
+
+    async def factory(settings):
+        database = Database(pg_url, max_size=1)
+        await database.open()
+        try:
+            return await build_services(settings, db=database, storage=None, vision_model="x", sku_model="y")
+        except RuntimeError:
+            await database.close()
+            raise
+
+    with pytest.raises(RuntimeError, match="Owner login needs SUPABASE_URL"):
+        with TestClient(create_app(BASE_SETTINGS, factory)):
+            pass
+
+
+def test_invoice_list_pages(h):
+    """The list comes a page at a time; X-Total-Count gives the total for the page buttons."""
+    supplier = h.supplier()
+    for n in range(7):
+        h.client.post("/invoices", json=typed_invoice(supplier["id"], invoice_number=f"P-{n}",
+                                                      invoice_date=f"2026-10-{10 + n:02d}"))
+    first = h.client.get("/invoices", params={"limit": 3})
+    assert first.headers["x-total-count"] == "7"
+    assert [i["invoice_number"] for i in first.json()] == ["P-6", "P-5", "P-4"]
+    second = h.client.get("/invoices", params={"limit": 3, "offset": 3}).json()
+    last = h.client.get("/invoices", params={"limit": 3, "offset": 6}).json()
+    assert [i["invoice_number"] for i in second] == ["P-3", "P-2", "P-1"] and [i["invoice_number"] for i in last] == ["P-0"]
+    assert h.client.get("/invoices", params={"limit": 3, "offset": 9}).json() == []
+    filtered = h.client.get("/invoices", params={"invoice_number": "P-1", "limit": 3})
+    assert filtered.headers["x-total-count"] == "1"
+    assert h.client.get("/invoices", params={"offset": -1}).status_code == 422
+    preflight = h.client.options("/invoices", headers={"Origin": "http://localhost:3001", "Access-Control-Request-Method": "GET"})
+    assert preflight.status_code == 200
+    cors = h.client.get("/invoices", headers={"Origin": "http://localhost:3001"})
+    assert "x-total-count" in cors.headers["access-control-expose-headers"].lower()

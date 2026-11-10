@@ -1,25 +1,31 @@
 "use client";
 
 /**
- * Supplier Profile screen (proposal): the supplier list, adding a supplier, and one supplier's
- * profile (?supplier=<id>): details, usual credit days, totals and outstanding balance (calculated
- * by the backend), invoices with paid / not-paid marking, and the item lines bought.
+ * Supplier Profile screen (proposal): the supplier list, adding a supplier, the payments waiting
+ * for the owner's confirmation (all suppliers), and one supplier's profile (?supplier=<id>):
+ * details, usual credit days, totals and outstanding balance (calculated by the backend), invoices
+ * with paid / not-paid marking, payments (record, upload a receipt, check, confirm, reject) and the
+ * item lines bought.
  */
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
+import { DocumentUpload } from "@/components/DocumentUpload";
 import { StatusBadge } from "@/components/InvoiceList";
+import { PaymentForm } from "@/components/PaymentForm";
+import { PaymentList } from "@/components/PaymentList";
 import { SupplierForm } from "@/components/SupplierForm";
 import {
   errorMessage,
   getSupplierProfile,
+  listPayments,
   listSuppliers,
   setPaymentStatus,
   updateSupplier,
 } from "@/lib/api";
 import { money, numberText, parseNumber } from "@/lib/money";
-import type { Supplier, SupplierProfile } from "@/lib/types";
+import type { Supplier, SupplierPayment, SupplierProfile } from "@/lib/types";
 
 /** One total from the backend, shown as a small card. */
 function Total({ label, value }: { label: string; value: string }) {
@@ -70,27 +76,68 @@ function CreditDaysEditor({ supplier, onSaved }: { supplier: Supplier; onSaved: 
   );
 }
 
-/** One supplier's profile, loaded from GET /suppliers/{id}/profile. */
-function ProfileView({ supplierId, onChanged }: { supplierId: string; onChanged: () => void }) {
-  const [version, setVersion] = useState(0);
-  const [result, setResult] = useState<{ key: string; profile: SupplierProfile | null; error: string } | null>(null);
-  const [actionError, setActionError] = useState("");
-  const requestKey = `${supplierId}:${version}`;
+/** Payments of every supplier still waiting for the owner's confirmation (GET /payments?status=unconfirmed). */
+function WaitingPayments({ refreshKey, onChanged }: { refreshKey: number; onChanged: () => void }) {
+  const [result, setResult] = useState<{ payments: SupplierPayment[]; error: string } | null>(null);
 
-  // Load (or reload) the profile whenever the supplier or version changes.
+  // Load (or reload) the waiting payments whenever something changed.
   useEffect(() => {
     let cancelled = false;
-    getSupplierProfile(supplierId)
-      .then((profile) => {
-        if (!cancelled) setResult({ key: `${supplierId}:${version}`, profile, error: "" });
+    listPayments({ status: "unconfirmed" })
+      .then((payments) => {
+        if (!cancelled) setResult({ payments, error: "" });
       })
       .catch((error) => {
-        if (!cancelled) setResult({ key: `${supplierId}:${version}`, profile: null, error: errorMessage(error) });
+        if (!cancelled) setResult({ payments: [], error: errorMessage(error) });
       });
     return () => {
       cancelled = true;
     };
-  }, [supplierId, version]);
+  }, [refreshKey]);
+
+  if (!result) return null;
+  if (result.error) return <p className="banner-error">{result.error}</p>;
+  if (result.payments.length === 0) return null;
+  const reminders = result.payments.filter((payment) => payment.reminder_due).length;
+
+  return (
+    <div className="bs-card overflow-x-auto">
+      <p className="text-sm font-semibold text-[var(--brand-deep)]">
+        Payments waiting for your confirmation ({result.payments.length})
+      </p>
+      <p className="mb-2 mt-1 text-sm text-[var(--muted)]">
+        A payment counts only after you confirm it.
+        {reminders > 0 ? ` ${reminders} of them have waited more than two days; they stay unconfirmed until you answer.` : ""}
+      </p>
+      <PaymentList payments={result.payments} showSupplier onChanged={onChanged} />
+    </div>
+  );
+}
+
+/** One supplier's profile, loaded from GET /suppliers/{id}/profile. */
+function ProfileView({ supplierId, refreshKey, onChanged }: { supplierId: string; refreshKey: number; onChanged: () => void }) {
+  const [version, setVersion] = useState(0);
+  const [result, setResult] = useState<{ key: string; profile: SupplierProfile | null; error: string } | null>(null);
+  const [actionError, setActionError] = useState("");
+  const [adding, setAdding] = useState<"" | "typed" | "photo">("");
+  const [notice, setNotice] = useState("");
+  const requestKey = `${supplierId}:${version}:${refreshKey}`;
+
+  // Load (or reload) the profile whenever the supplier, version or a payment elsewhere changes.
+  useEffect(() => {
+    let cancelled = false;
+    const key = `${supplierId}:${version}:${refreshKey}`;
+    getSupplierProfile(supplierId)
+      .then((profile) => {
+        if (!cancelled) setResult({ key, profile, error: "" });
+      })
+      .catch((error) => {
+        if (!cancelled) setResult({ key, profile: null, error: errorMessage(error) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [supplierId, version, refreshKey]);
 
   /** Reload this profile and tell the page the supplier list may have changed. */
   function reload() {
@@ -130,15 +177,73 @@ function ProfileView({ supplierId, onChanged }: { supplierId: string; onChanged:
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Total label="Invoices" value={String(totals.invoice_count)} />
         <Total label="Drafts" value={String(totals.draft_count)} />
         <Total label="Verified total" value={money(totals.verified_total)} />
         <Total label="Outstanding" value={money(totals.outstanding)} />
         <Total label="Next due" value={totals.next_due_date ?? "—"} />
+        <Total label="Paid (confirmed)" value={money(totals.paid_total)} />
+        <Total
+          label="Waiting confirmation"
+          value={totals.unconfirmed_count ? `${money(totals.unconfirmed_total)} (${totals.unconfirmed_count})` : "—"}
+        />
       </div>
 
       {actionError ? <p className="banner-error">{actionError}</p> : null}
+      {notice ? <p className="banner-ok">{notice}</p> : null}
+
+      <div className="bs-card overflow-x-auto">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-[var(--brand-deep)]">Payments</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn btn-primary" onClick={() => setAdding(adding === "typed" ? "" : "typed")}>
+              Record payment
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={() => setAdding(adding === "photo" ? "" : "photo")}>
+              Upload receipt
+            </button>
+          </div>
+        </div>
+        {adding === "typed" ? (
+          <div className="mb-3 rounded border border-[var(--line)] p-3">
+            <PaymentForm
+              supplierId={supplier.id}
+              onSaved={(payment) => {
+                setAdding("");
+                setNotice(
+                  payment.status === "confirmed"
+                    ? "Payment saved and confirmed."
+                    : "Payment saved. Confirm it once you have checked it.",
+                );
+                reload();
+              }}
+              onCancel={() => setAdding("")}
+            />
+          </div>
+        ) : null}
+        {adding === "photo" ? (
+          <DocumentUpload
+            className="mb-3"
+            supplierId={supplier.id}
+            onReceiptSaved={(receipt) => {
+              setAdding("");
+              setNotice(
+                `Receipt ${receipt.receipt_number ?? ""} read: ${receipt.payments.length} payment(s) saved. ` +
+                  "Check each one against the photo and confirm it.",
+              );
+              reload();
+            }}
+          />
+        ) : null}
+        <PaymentList
+          payments={profile.payments}
+          onChanged={() => {
+            setNotice("");
+            reload();
+          }}
+        />
+      </div>
 
       <div className="bs-card overflow-x-auto">
         <p className="mb-2 text-sm font-semibold text-[var(--brand-deep)]">Invoices</p>
@@ -149,6 +254,7 @@ function ProfileView({ supplierId, onChanged }: { supplierId: string; onChanged:
               <th>Date</th>
               <th>Due</th>
               <th className="text-right">Total</th>
+              <th className="text-right">Paid</th>
               <th>Status</th>
               <th>Payment</th>
               <th></th>
@@ -157,7 +263,7 @@ function ProfileView({ supplierId, onChanged }: { supplierId: string; onChanged:
           <tbody>
             {profile.invoices.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-3 py-4 text-[var(--muted)]">
+                <td colSpan={8} className="px-3 py-4 text-[var(--muted)]">
                   No invoices from this supplier yet.
                 </td>
               </tr>
@@ -172,6 +278,7 @@ function ProfileView({ supplierId, onChanged }: { supplierId: string; onChanged:
                   <td className="px-2 py-2">{invoice.invoice_date ?? "—"}</td>
                   <td className="px-2 py-2">{invoice.due_date ?? "—"}</td>
                   <td className="px-2 py-2 text-right">{money(invoice.total)}</td>
+                  <td className="px-2 py-2 text-right">{invoice.amount_paid > 0 ? money(invoice.amount_paid) : "—"}</td>
                   <td className="px-2 py-2">
                     <StatusBadge status={invoice.status} />
                   </td>
@@ -242,6 +349,7 @@ function SupplierProfileScreen() {
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
+  const [paymentsVersion, setPaymentsVersion] = useState(0);
 
   // Load the supplier list (again after a supplier is added or changed).
   useEffect(() => {
@@ -289,6 +397,8 @@ function SupplierProfileScreen() {
 
       {error ? <p className="banner-error">{error}</p> : null}
 
+      <WaitingPayments refreshKey={paymentsVersion} onChanged={() => setPaymentsVersion((current) => current + 1)} />
+
       <div className="grid gap-4 lg:grid-cols-[16rem_1fr]">
         <div className="bs-card !p-2">
           {suppliers === null ? (
@@ -317,7 +427,11 @@ function SupplierProfileScreen() {
             <ProfileView
               key={selectedId}
               supplierId={selectedId}
-              onChanged={() => setListVersion((current) => current + 1)}
+              refreshKey={paymentsVersion}
+              onChanged={() => {
+                setListVersion((current) => current + 1);
+                setPaymentsVersion((current) => current + 1);
+              }}
             />
           ) : (
             <div className="bs-card">

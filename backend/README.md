@@ -12,13 +12,18 @@ pytest.ini                      test settings
 .env.example                    every setting the API reads, with comments
 
 api/                            HTTP routes: read the request, call a service, return JSON
-  invoices.py                   Invoice Manager: upload, type in, get, search, fix, confirm product,
-                                verify, reject, mark paid, audit log; product catalogue
-  dashboard.py                  GET /dashboard (review queue, purchases, supplier spend, payments due)
-  suppliers.py                  suppliers, credit days, Supplier Profile figures
+  auth.py                       owner login (login, refresh, logout through Supabase Auth) and the
+                                check every data route runs first: valid login token -> its shop
+  invoices.py                   Invoice Manager: upload (invoice or receipt photo), type in, get, search,
+                                fix, confirm product, verify, reject, mark paid, audit log; product catalogue
+  dashboard.py                  GET /dashboard (review queue, purchases, supplier spend, payments due,
+                                payments waiting for confirmation and 2-day reminders)
+  suppliers.py                  suppliers, credit days, Supplier Profile figures; supplier payments
+                                (record, correct, confirm, reject)
 
 agentic/                        the AI agent pipeline (OpenAI Agents SDK)
-  pipeline.py                   invoice_ingest: the fixed order photo -> agent -> audit -> save -> match
+  pipeline.py                   invoice_ingest: the fixed order photo -> agent -> audit -> save -> match;
+                                a receipt photo -> one unconfirmed supplier payment per invoice it settles
   vision_agent.py               image preparation (CLAHE, rotation, crops) + InvoiceVisionAgent
   guardrails.py                 output guardrail: no line items or no date -> "retake the photo"
   schemas.py                    the form InvoiceVisionAgent fills in (strict Pydantic schema)
@@ -26,9 +31,11 @@ agentic/                        the AI agent pipeline (OpenAI Agents SDK)
   tools.py                      find_sku_candidates, the agent's catalogue search tool
 
 services/                       business rules in plain Python (no LLM)
-  invoice_service.py            math_audit (+/- Rs 1), date checks, due dates, the owner's invoice
-                                workflow (type in, fix, confirm product, verify, reject, mark paid)
-  cash_flow_service.py          payables: outstanding balance, payments due, supplier totals
+  invoice_service.py            math_audit (+/- Rs 1), date checks, due dates, an invoice's payment status
+                                from its payments, the owner's invoice workflow (type in, fix, confirm
+                                product, verify, reject, mark paid)
+  cash_flow_service.py          payables: what is still owed, payments due, supplier totals; supplier
+                                payments (record, correct, confirm, reject) and their confirm rules
   purchase_analysis_service.py  monthly purchases, supplier spend, a supplier's verified item lines
   alias_service.py              product catalogue search (exact name, then embeddings in pgvector)
 
@@ -64,10 +71,13 @@ order in the Supabase SQL editor).
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/health` | is the API up, what is configured |
-| GET | `/dashboard` | review queue, monthly purchases, supplier spend, payments due |
+| GET | `/health` | is the API up, what is configured (no login needed) |
+| POST | `/auth/login` | `{email, password}` -> access + refresh token and the shop (no login needed) |
+| POST | `/auth/refresh` | `{refresh_token}` -> a renewed session (no login needed) |
+| POST | `/auth/logout` | ends the session sent in the Authorization header |
+| GET | `/dashboard` | review queue, monthly purchases, supplier spend, payments due, payments to confirm, 2-day reminders |
 | GET | `/invoices` | search: `supplier_id`, `status`, `payment_status`, `invoice_number`, `date_from`, `date_to`, `limit` |
-| POST | `/invoices/upload` | photo (+ optional `supplier_id`) -> audited, matched draft |
+| POST | `/invoices/upload` | photo (+ optional `supplier_id`) -> audited, matched draft; a receipt photo -> unconfirmed payments (`document_type: "receipt"`) |
 | POST | `/invoices` | an invoice typed in by hand -> audited, matched draft |
 | GET | `/invoices/{id}` | invoice, lines, product matches, photo link |
 | GET | `/invoices/{id}/events` | audit log |
@@ -79,7 +89,18 @@ order in the Supabase SQL editor).
 | GET / POST | `/products` | master catalogue |
 | GET / POST | `/suppliers` | suppliers |
 | GET / POST | `/suppliers/{id}` | one supplier / change fields such as `credit_days` |
-| GET | `/suppliers/{id}/profile` | totals, invoices and verified item lines |
+| GET | `/suppliers/{id}/profile` | totals, invoices, verified item lines and payments |
+| GET | `/payments` | filters: `supplier_id`, `invoice_id`, `status` (`unconfirmed`, `confirmed`, `rejected`) |
+| POST | `/payments` | a payment typed in by hand (unconfirmed; `confirm: true` saves and confirms it) |
+| GET | `/payments/{id}` | one payment, with a link to its receipt photo |
+| POST | `/payments/{id}/fix` | owner corrections (the payment goes back to unconfirmed) |
+| POST | `/payments/{id}/confirm` | the owner confirms it; 409 with reasons until it is complete and not more than is owed |
+| POST | `/payments/{id}/reject` | `{reason}`: keep a wrong payment out of the ledger (kept and logged) |
+
+Every other route needs `Authorization: Bearer <access token>` from `/auth/login`: no token or an
+expired one gets 401, a login not linked to a shop (table `business_users`) gets 403, and each
+login only ever reads its own shop's rows. There is no sign-up: the team creates each owner's
+login in Supabase (Authentication > Users) and links it in `business_users`.
 
 Errors come back as `{"error_type": ..., "message": ...}` with the HTTP status. Interactive docs
 are at `/docs` while the API runs.
@@ -121,6 +142,5 @@ owner's permission letter forbids publishing them, and this repository is public
 
 ## Not built yet
 
-Owner login (every request uses `DEFAULT_BUSINESS_ID`; see `AppServices.business_id_for` in
-main.py), receipts and supplier-payment records, expenses, the Tesseract OCR baseline, Model 1
-(item price), Model 2 (spend forecast) and the cash planner projection.
+Password reset emails, expenses, the Tesseract OCR baseline, Model 1 (item price), Model 2
+(spend forecast) and the cash planner projection.

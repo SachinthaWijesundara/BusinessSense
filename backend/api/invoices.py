@@ -1,6 +1,7 @@
 """Invoice API (proposal: api/invoices.py, the Invoice Manager): upload, type in, review, fix,
 confirm products, verify, reject, mark paid, search; plus the product catalogue the owner picks
-from or adds to while confirming matches.
+from or adds to while confirming matches. The photo upload also takes payment receipts: those are
+saved as unconfirmed supplier payments (see api/suppliers.py for the payment endpoints).
 
 Routes are thin: they read the request, call the pipeline or the invoice service, and return JSON.
 """
@@ -11,10 +12,11 @@ from datetime import date
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from fastapi import APIRouter, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile
 
 from agentic.pipeline import invoice_ingest
 from database.client import AuditEvent, Invoice, InvoiceQuery, InvoiceStatus, InvoiceSummary, NewProduct, PaymentStatus, ProductRecord
+from services.cash_flow_service import ReceiptUpload
 from services.invoice_service import (
     ConfirmSku,
     InvoiceCreate,
@@ -69,6 +71,7 @@ async def _with_image_link(services: AppServices, invoice: Invoice) -> Invoice:
 @router.get("/invoices", response_model=list[InvoiceSummary], tags=["invoices"])
 async def list_invoices(
     request: Request,
+    response: Response,
     supplier_id: UUID | None = None,
     status: InvoiceStatus | None = None,
     payment_status: PaymentStatus | None = None,
@@ -76,22 +79,30 @@ async def list_invoices(
     date_from: date | None = None,
     date_to: date | None = None,
     limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> list[InvoiceSummary]:
-    """Search invoices by supplier, status, payment status, number and date range."""
+    """Search invoices by supplier, status, payment status, number and date range, one page at a
+    time (``limit`` invoices from ``offset``). The X-Total-Count header says how many match in all."""
     services, business_id = _context(request)
     query = InvoiceQuery(supplier_id=str(supplier_id) if supplier_id else None, status=status, payment_status=payment_status,
-                         invoice_number=invoice_number, date_from=date_from, date_to=date_to, limit=limit)
+                         invoice_number=invoice_number, date_from=date_from, date_to=date_to, limit=limit, offset=offset)
+    response.headers["X-Total-Count"] = str(await services.db.count_invoices(business_id, query))
     return await services.db.list_invoices(business_id, query)
 
 
-@router.post("/invoices/upload", status_code=201, response_model=Invoice, tags=["invoices"])
-async def upload_invoice(request: Request, file: UploadFile = File(...), supplier_id: UUID | None = Form(None)) -> Invoice:
-    """Read a photo with InvoiceVisionAgent, audit the math, match products and save a draft."""
+@router.post("/invoices/upload", status_code=201, response_model=Invoice | ReceiptUpload, tags=["invoices"])
+async def upload_invoice(request: Request, file: UploadFile = File(...),
+                         supplier_id: UUID | None = Form(None)) -> Invoice | ReceiptUpload:
+    """Read a photo with InvoiceVisionAgent. An invoice: audit the math, match products and save a
+    draft. A payment receipt: save one unconfirmed payment per invoice it settles
+    (``document_type: "receipt"`` in the reply)."""
     services, business_id = _context(request)
     data = await read_upload(file, services.settings.max_upload_bytes, services.settings.max_upload_mb)
-    invoice = await invoice_ingest(data, services=services, business_id=business_id,
-                                   supplier_id=str(supplier_id) if supplier_id else None, content_type=file.content_type)
-    return await _with_image_link(services, invoice)
+    saved = await invoice_ingest(data, services=services, business_id=business_id,
+                                 supplier_id=str(supplier_id) if supplier_id else None, content_type=file.content_type)
+    if isinstance(saved, ReceiptUpload):
+        return saved
+    return await _with_image_link(services, saved)
 
 
 @router.post("/invoices", status_code=201, response_model=Invoice, tags=["invoices"])

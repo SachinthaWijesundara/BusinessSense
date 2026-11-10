@@ -5,6 +5,8 @@
 
 export type InvoiceStatus = "draft" | "verified" | "rejected";
 export type PaymentStatus = "unpaid" | "paid" | "unconfirmed";
+export type SupplierPaymentStatus = "unconfirmed" | "confirmed" | "rejected";
+export type PaymentMethod = "cash" | "cheque" | "bank_transfer";
 export type MatchStatus = "unmatched" | "linked" | "pending" | "new_product";
 export type PaymentType = "cash" | "credit";
 
@@ -112,6 +114,7 @@ export type InvoiceSummary = {
   missing_fields: string[];
   low_confidence_fields: string[];
   payment_status: PaymentStatus;
+  amount_paid: number;
   image_path: string | null;
   verified_at: string | null;
   created_at: string | null;
@@ -182,6 +185,13 @@ export type InvoiceQuery = {
   date_from?: string;
   date_to?: string;
   limit?: number;
+  offset?: number;
+};
+
+/** One page of the invoice search, with how many invoices match in all. */
+export type InvoicePage = {
+  rows: InvoiceSummary[];
+  total: number;
 };
 
 /** A verified, unpaid invoice that falls due soon (or is overdue). */
@@ -192,6 +202,8 @@ export type PaymentDue = {
   invoice_number: string | null;
   due_date: string;
   total: number | null;
+  amount_paid: number;
+  still_owed: number | null;
   days_left: number;
 };
 
@@ -202,6 +214,8 @@ export type Dashboard = {
   monthly_purchases: { month: string; total: number }[];
   supplier_spend: { supplier_id: string; supplier_name: string; total: number }[];
   payments_due: PaymentDue[];
+  unconfirmed_payments: number;
+  payment_reminders: SupplierPayment[];
   forecast: null;
   forecast_note: string;
 };
@@ -228,9 +242,85 @@ export type SupplierProfile = {
     verified_total: number;
     outstanding: number;
     next_due_date: string | null;
+    paid_total: number;
+    unconfirmed_total: number;
+    unconfirmed_count: number;
   };
   invoices: InvoiceSummary[];
   lines: SupplierLine[];
+  payments: SupplierPayment[];
+};
+
+/**
+ * One payment to a supplier: typed in, or one invoice settled on a receipt photo. It stays
+ * "unconfirmed" until the owner confirms it; reminder_due is set once it has waited two days.
+ */
+export type SupplierPayment = {
+  id: string;
+  business_id: string;
+  supplier_id: string | null;
+  supplier_name: string | null;
+  supplier_name_raw: string | null;
+  invoice_id: string | null;
+  invoice_number: string | null;
+  invoice_number_raw: string | null;
+  amount: number | null;
+  paid_on: string | null;
+  method: PaymentMethod | null;
+  receipt_number: string | null;
+  cheque_number: string | null;
+  bank_name: string | null;
+  cheque_date: string | null;
+  status: SupplierPaymentStatus;
+  source: "manual" | "agent";
+  image_path: string | null;
+  image_url: string | null;
+  low_confidence_fields: string[];
+  confirmed_at: string | null;
+  reminder_sent_at: string | null;
+  reminder_due: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+/** Payment fields the owner types or corrects (POST /payments/{id}/fix sends only these). */
+export type PaymentInput = {
+  supplier_id?: string | null;
+  invoice_id?: string | null;
+  invoice_number_raw?: string | null;
+  amount?: number | null;
+  paid_on?: string | null;
+  method?: PaymentMethod | null;
+  receipt_number?: string | null;
+  cheque_number?: string | null;
+  bank_name?: string | null;
+  cheque_date?: string | null;
+};
+
+/** Body of POST /payments: a payment typed in by hand; confirm saves and confirms it at once. */
+export type PaymentCreate = PaymentInput & {
+  supplier_id: string;
+  amount: number;
+  paid_on: string;
+  confirm?: boolean;
+};
+
+/** Reply of POST /invoices/upload when the photo was a payment receipt. */
+export type ReceiptUpload = {
+  document_type: "receipt";
+  receipt_number: string | null;
+  supplier_id: string | null;
+  supplier_name_raw: string | null;
+  missing_fields: string[];
+  image_url: string | null;
+  payments: SupplierPayment[];
+};
+
+/** Filters for GET /payments. */
+export type PaymentQuery = {
+  supplier_id?: string;
+  invoice_id?: string;
+  status?: SupplierPaymentStatus;
 };
 
 /** Reply of GET /health. */
@@ -239,4 +329,24 @@ export type Health = {
   database: string;
   openai_configured: boolean;
   image_storage: boolean;
+  login_required: boolean;
+};
+
+/** Reply of POST /auth/login and /auth/refresh. */
+export type LoginReply = {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  email: string | null;
+  business_id: string;
+  business_name: string;
+};
+
+/** The owner's login session as kept in this browser (expires_at in milliseconds). */
+export type Session = {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number;
+  email: string | null;
+  business_name: string;
 };

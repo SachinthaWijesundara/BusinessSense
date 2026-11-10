@@ -1,6 +1,7 @@
 -- 01_schema.sql: the BusinessSense tables in Supabase Postgres (proposal section 7.1).
 --
--- Creates: businesses, suppliers, products (master catalogue), product_aliases (printed names
+-- Creates: businesses, business_users (which login belongs to which shop), suppliers, products
+-- (master catalogue), product_aliases (printed names
 -- with pgvector embeddings), invoices, invoice_items, supplier_payments, expenses, cash_records,
 -- model_predictions, extraction_runs (raw agent outputs), audit_log, and the
 -- match_product_aliases() search used by SkuMatchAgent's find_sku_candidates tool.
@@ -25,9 +26,25 @@ create table if not exists businesses (
   created_at timestamptz not null default now()
 );
 
+alter table businesses add column if not exists owner_user_id uuid;
+
+-- A project with no shop yet gets this placeholder shop; a project that already has its shop
+-- (one Supabase project per shop) keeps just that one.
 insert into businesses (id, name)
-values ('00000000-0000-0000-0000-000000000001', 'Hardware shop')
-on conflict (id) do nothing;
+select '00000000-0000-0000-0000-000000000001', 'Hardware shop'
+where not exists (select 1 from businesses);
+
+-- business_users: which Supabase Auth login may use which business. The backend checks the
+-- logged-in user's token and serves only the rows of the business listed here. Passwords are
+-- kept (hashed) by Supabase Auth, never in these tables.
+create table if not exists business_users (
+  business_id uuid not null references businesses(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  role text not null default 'owner' check (role in ('owner', 'staff')),
+  created_at timestamptz not null default now(),
+  primary key (business_id, user_id)
+);
+create index if not exists business_users_user_id_idx on business_users (user_id);
 
 -- ---------------------------------------------------------------------------------------------
 -- suppliers
@@ -84,9 +101,24 @@ create index if not exists product_aliases_embedding_idx
 
 -- The data-entry app keeps its catalogue in an "items" table. Copy those items into products
 -- once (names already in products are skipped, ignoring case), so SkuMatchAgent can match them.
+-- Items that carry a business_id go to that shop; older ones without it to the placeholder shop.
 do $$
 begin
   if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'items' and column_name = 'business_id'
+  ) then
+    execute $copy$
+      insert into products (business_id, name, sku)
+      select distinct on (i.business_id, lower(trim(i.name))) i.business_id, trim(i.name), i.sku
+      from items i
+      where trim(coalesce(i.name, '')) <> ''
+        and not exists (
+          select 1 from products p where p.business_id = i.business_id and lower(p.name) = lower(trim(i.name))
+        )
+      order by i.business_id, lower(trim(i.name)), i.sku nulls last
+    $copy$;
+  elsif exists (
     select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relname = 'items' and c.relkind = 'r'
   ) then
@@ -176,6 +208,10 @@ create table if not exists invoice_items (
 alter table invoice_items alter column quantity drop not null;
 alter table invoice_items alter column mro drop not null;
 alter table invoice_items alter column line_total drop not null;
+-- Lines typed in the newer data-entry style keep the printed MRP and discount % (mro is then 0).
+alter table invoice_items add column if not exists mrp numeric(14, 2);
+alter table invoice_items add column if not exists discount_rate numeric(6, 2);
+alter table invoice_items add column if not exists net_price numeric(14, 2);
 alter table invoice_items add column if not exists product_id uuid references products(id) on delete set null;
 alter table invoice_items add column if not exists suggested_product_id uuid references products(id) on delete set null;
 alter table invoice_items add column if not exists match_status text not null default 'unmatched'
@@ -189,24 +225,42 @@ create index if not exists invoice_items_product_idx on invoice_items (product_i
 -- ---------------------------------------------------------------------------------------------
 -- payments, cash records, predictions
 -- ---------------------------------------------------------------------------------------------
+-- One row per invoice settled. A receipt that settles several invoices gives several rows with the
+-- same receipt_number. A payment stays unconfirmed until the owner confirms it; a wrong one is
+-- rejected (kept and logged, never deleted).
 create table if not exists supplier_payments (
   id uuid primary key default gen_random_uuid(),
   business_id uuid not null default '00000000-0000-0000-0000-000000000001' references businesses(id),
-  supplier_id uuid not null references suppliers(id) on delete restrict,
+  supplier_id uuid references suppliers(id) on delete restrict,
   invoice_id uuid references invoices(id) on delete set null,
-  amount numeric(12, 2) not null check (amount > 0),
+  amount numeric(12, 2) check (amount > 0),
   paid_on date,
   method text check (method in ('cash', 'cheque', 'bank_transfer')),
   receipt_number text,
   cheque_number text,
   bank_name text,
   cheque_date date,
-  -- A payment stays unconfirmed until the owner confirms it.
-  status text not null default 'unconfirmed' check (status in ('confirmed', 'unconfirmed')),
+  status text not null default 'unconfirmed',
   reminder_sent_at timestamptz,
   created_at timestamptz not null default now()
 );
+-- A receipt read from a photo can arrive before its supplier is known or its amount is readable;
+-- both are required before the owner can confirm it.
+alter table supplier_payments alter column supplier_id drop not null;
+alter table supplier_payments alter column amount drop not null;
+alter table supplier_payments add column if not exists supplier_name_raw text;
+alter table supplier_payments add column if not exists invoice_number_raw text;
+alter table supplier_payments add column if not exists source text not null default 'manual'
+  check (source in ('manual', 'agent'));
+alter table supplier_payments add column if not exists image_path text;
+alter table supplier_payments add column if not exists low_confidence_fields jsonb not null default '[]'::jsonb;
+alter table supplier_payments add column if not exists confirmed_at timestamptz;
+alter table supplier_payments add column if not exists updated_at timestamptz not null default now();
+alter table supplier_payments drop constraint if exists supplier_payments_status_check;
+alter table supplier_payments add constraint supplier_payments_status_check
+  check (status in ('unconfirmed', 'confirmed', 'rejected'));
 create index if not exists supplier_payments_supplier_idx on supplier_payments (business_id, supplier_id);
+create index if not exists supplier_payments_invoice_idx on supplier_payments (invoice_id);
 
 create table if not exists expenses (
   id uuid primary key default gen_random_uuid(),

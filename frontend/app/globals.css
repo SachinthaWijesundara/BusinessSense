@@ -41,6 +41,17 @@ body {
   }
 }
 
+/* On wider screens the sidebar stays in place; only the screen on the right scrolls. */
+@media (min-width: 841px) {
+  .bs-nav {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    align-self: start;
+  }
+}
+
 .bs-nav {
   background: linear-gradient(180deg, var(--brand-deep), #0f2f24);
   color: #e8f2ec;
