@@ -79,6 +79,8 @@ body {
 
 .bs-main {
   padding: 1.5rem 1.75rem 2.5rem;
+  /* Let wide tables scroll inside their own card instead of widening the whole page. */
+  min-width: 0;
 }
 
 .bs-card {

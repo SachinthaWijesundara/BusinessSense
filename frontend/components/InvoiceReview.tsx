@@ -20,6 +20,7 @@ import {
   fixInvoice,
   getInvoice,
   getInvoiceEvents,
+  getInvoicePriceCheck,
   listProducts,
   listSuppliers,
   rejectInvoice,
@@ -27,7 +28,7 @@ import {
   verifyInvoice,
 } from "@/lib/api";
 import { money } from "@/lib/money";
-import type { AuditEvent, Invoice, InvoiceLine, Product, Supplier } from "@/lib/types";
+import type { AuditEvent, Invoice, InvoiceLine, LineCheck, Product, Supplier } from "@/lib/types";
 
 /** Everything the screen loads from the backend. */
 type Loaded = {
@@ -54,6 +55,31 @@ function MatchBadge({ line }: { line: InvoiceLine }) {
   return <span className="badge">not matched yet</span>;
 }
 
+/** A line's price check: Model 1's expected range for its product, from earlier purchases. */
+function PriceCheckCell({ check }: { check: LineCheck | undefined }) {
+  if (!check) return <span className="text-[var(--muted)]">…</span>;
+  if (check.status === "no_product") return <span className="text-xs text-[var(--muted)]">{check.message}</span>;
+  const range =
+    check.low !== null && check.high !== null ? `Rs ${money(check.low)} – ${money(check.high)}` : null;
+  return (
+    <div className="text-sm" title={check.message}>
+      {check.status === "above" || check.status === "below" ? (
+        <span className="badge badge-bad">{`${Math.abs(check.difference_pct ?? 0)}% ${check.status} range`}</span>
+      ) : check.status === "inside" ? (
+        <span className="badge badge-good">in range</span>
+      ) : (
+        <span className="badge">not checked</span>
+      )}
+      <p className="mt-1 text-xs text-[var(--muted)]">
+        {check.unit_price !== null ? `Paid Rs ${money(check.unit_price)} per unit` : null}
+        {check.expected !== null ? ` · expected Rs ${money(check.expected)}` : null}
+        {range ? ` (${range})` : check.expected !== null && check.is_baseline ? " · baseline" : null}
+      </p>
+      {check.status === "no_range" ? <p className="text-xs text-[var(--muted)]">{check.message}</p> : null}
+    </div>
+  );
+}
+
 /** The whole review screen for one invoice. */
 export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
   const [data, setData] = useState<Loaded | null>(null);
@@ -63,6 +89,8 @@ export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
   const [reasons, setReasons] = useState<string[]>([]);
   const [rejectReason, setRejectReason] = useState("");
   const [addingSupplier, setAddingSupplier] = useState(false);
+  const [priceChecks, setPriceChecks] = useState<{ version: string; rows: LineCheck[] } | null>(null);
+  const invoiceVersion = data ? `${data.invoice.id}:${data.invoice.updated_at}` : null;
 
   // Load the invoice, the catalogue, the suppliers and the audit log.
   useEffect(() => {
@@ -78,6 +106,22 @@ export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
       cancelled = true;
     };
   }, [invoiceId]);
+
+  // Check each line's unit price against its product's expected range (again after every change).
+  useEffect(() => {
+    if (!invoiceVersion) return;
+    let cancelled = false;
+    getInvoicePriceCheck(invoiceId)
+      .then((rows) => {
+        if (!cancelled) setPriceChecks({ version: invoiceVersion, rows });
+      })
+      .catch(() => {
+        if (!cancelled) setPriceChecks({ version: invoiceVersion, rows: [] });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [invoiceId, invoiceVersion]);
 
   /** Run one owner action against the backend, then show the invoice and log it returns. */
   async function run(action: () => Promise<Invoice>, successText: string) {
@@ -162,6 +206,8 @@ export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
   if (!data) return <p className="text-[var(--muted)]">Loading invoice…</p>;
 
   const { invoice, products, suppliers, events } = data;
+  const checks = priceChecks?.version === invoiceVersion ? priceChecks.rows : [];
+  const outsideRange = checks.filter((check) => check.status === "above" || check.status === "below").length;
   const supplierName = invoice.supplier_name ?? invoice.supplier_name_raw ?? "Unknown supplier";
 
   return (
@@ -321,12 +367,19 @@ export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
             Products are matched once the maths adds up. You can still link them by hand.
           </p>
         ) : null}
+        {outsideRange > 0 ? (
+          <p className="banner-partial mb-2 text-sm">
+            {outsideRange} line{outsideRange === 1 ? " is" : "s are"} priced outside the expected range. Check the unit
+            price and pack size before {invoice.status === "verified" ? "relying on this invoice" : "verifying"}.
+          </p>
+        ) : null}
         <table className="entry-table">
           <thead>
             <tr>
               <th>Printed item</th>
               <th>Match</th>
               <th>Product</th>
+              <th>Price check</th>
               <th className="w-72">Link to a product</th>
             </tr>
           </thead>
@@ -368,6 +421,9 @@ export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
                   {line.match_reason ? (
                     <p className="mt-1 text-xs text-[var(--muted)]">{line.match_reason}</p>
                   ) : null}
+                </td>
+                <td className="px-2 py-2">
+                  <PriceCheckCell check={checks.find((check) => check.line_id === line.id)} />
                 </td>
                 <td className="px-2 py-2">
                   {/* Only a draft can change its product links; verified history stays as verified. */}

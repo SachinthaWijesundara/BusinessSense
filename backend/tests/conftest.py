@@ -263,6 +263,11 @@ class MemoryStorage:
         """A fake link for stored files."""
         return f"memory://{path}" if path in self.objects else None
 
+    async def download(self, path: str) -> bytes | None:
+        """A stored file's bytes, or None."""
+        found = self.objects.get(path)
+        return found[0] if found else None
+
     async def aclose(self) -> None:
         """Nothing to close."""
 
@@ -435,7 +440,8 @@ def make_harness(pg_url: str) -> Iterator[Callable[..., Harness]]:
             await database.open()
             holder["services"] = await build_services(
                 s, db=database, storage=MemoryStorage() if with_storage else None, auth=auth,
-                embedder=embedder or HashingEmbedder(), vision_model=vision, sku_model=sku_model(pick=sku_pick),
+                models_storage=MemoryStorage(), embedder=embedder or HashingEmbedder(), vision_model=vision,
+                sku_model=sku_model(pick=sku_pick),
             )
             return holder["services"]
 

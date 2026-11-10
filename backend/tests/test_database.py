@@ -497,3 +497,51 @@ async def test_mrp_style_lines_read_their_net_price(db, pg_url):
     loaded = await db.get_invoice(BIZ, invoice.id)
     assert [(line.item_name, line.unit_rate) for line in loaded.lines] == [("63mm uPVC pipe", 300.0), ("Elbow", 100.0)]
     assert sorted(l.unit_rate for l in await db.list_supplier_lines(BIZ, supplier.id)) == [100.0, 300.0]
+
+
+@pytest.mark.postgres
+@pytest.mark.anyio
+async def test_purchase_history_for_model_1(db, other_business):
+    """Model 1 learns only from verified invoices' lines that are linked to a product, oldest first."""
+    supplier = await db.create_supplier(BIZ, NewSupplier(name="Lanka Pipe Traders"))
+    pipe = await db.create_product(BIZ, NewProduct(name="63mm uPVC pipe"))
+
+    async def invoice(number: str, day: date, status: str, linked: bool) -> None:
+        """An invoice with one pipe line (linked or not) and one unlinked line."""
+        created = await db.create_invoice(BIZ, NewInvoice(supplier_id=supplier.id, invoice_number=number, invoice_date=day,
+                                                          total=700.0, status=status), lines(("63mm uPVC pipe", 2, 300.0), ("Elbow", 1, 100.0)))
+        if linked:
+            await db.update_line_match(BIZ, created.id, created.lines[0].id,
+                                       LineMatchUpdate(product_id=pipe.id, match_status="linked"))
+
+    await invoice("V-2", date(2026, 3, 1), "verified", True)
+    await invoice("V-1", date(2026, 1, 1), "verified", True)
+    await invoice("D-1", date(2026, 2, 1), "draft", True)
+    await invoice("V-3", date(2026, 4, 1), "verified", False)
+    history = await db.purchase_lines(BIZ)
+    assert [(h.invoice_date.isoformat(), h.product_name, h.quantity, h.line_total) for h in history] == [
+        ("2026-01-01", "63mm uPVC pipe", 2, 600), ("2026-03-01", "63mm uPVC pipe", 2, 600)]
+    assert await db.purchase_lines(BIZ, product_id=pipe.id) == history
+    assert await db.purchase_lines(OTHER) == []
+    assert await db.business_ids() == [BIZ, OTHER]
+
+
+@pytest.mark.anyio
+async def test_storage_download():
+    """A trained model is read back from the private bucket; a missing file is None."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        """Answer like Supabase Storage."""
+        if request.url.path.endswith("/object/authenticated/models/shop/item_price.joblib"):
+            assert request.headers["apikey"]
+            return httpx.Response(200, content=b"model-bytes")
+        if "missing" in request.url.path:
+            return httpx.Response(400, json={"error": "not_found"})
+        return httpx.Response(500, text="boom")
+
+    store = SupabaseStorage(url=URL, service_key="sb_secret_test", bucket="models",
+                            client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert await store.download("shop/item_price.joblib") == b"model-bytes"
+    assert await store.download("shop/missing.joblib") is None
+    with pytest.raises(StorageError):
+        await store.download("shop/other.joblib")
+    await store.aclose()

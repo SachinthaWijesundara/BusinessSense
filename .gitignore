@@ -16,6 +16,8 @@ __pycache__/
 *.pyc
 backend/.pytest_cache/
 backend/tests/pglite/node_modules/
+# Trained models and their reports are built from a shop's private invoices: never commit them
+backend/ml/output/
 
 # Editor and operating-system files
 .DS_Store

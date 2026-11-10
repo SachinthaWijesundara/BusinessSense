@@ -16,6 +16,9 @@ api/                            HTTP routes: read the request, call a service, r
                                 check every data route runs first: valid login token -> its shop
   invoices.py                   Invoice Manager: upload (invoice or receipt photo), type in, get, search,
                                 fix, confirm product, verify, reject, mark paid, audit log; product catalogue
+  analytics.py                  Purchase Analytics (the proposal's Forecast API for Model 1): products with
+                                their expected price, prices to check, one product's history, an
+                                invoice's price check
   dashboard.py                  GET /dashboard (review queue, purchases, supplier spend, payments due,
                                 payments waiting for confirmation and 2-day reminders)
   suppliers.py                  suppliers, credit days, Supplier Profile figures; supplier payments
@@ -36,11 +39,21 @@ services/                       business rules in plain Python (no LLM)
                                 product, verify, reject, mark paid)
   cash_flow_service.py          payables: what is still owed, payments due, supplier totals; supplier
                                 payments (record, correct, confirm, reject) and their confirm rules
-  purchase_analysis_service.py  monthly purchases, supplier spend, a supplier's verified item lines
+  purchase_analysis_service.py  monthly purchases, supplier spend, a supplier's verified item lines, and
+                                Purchase Analytics with Model 1 (each price judged from earlier ones)
   alias_service.py              product catalogue search (exact name, then embeddings in pgvector)
 
 database/
-  client.py                     every read and write to Supabase Postgres, and the private photo bucket
+  client.py                     every read and write to Supabase Postgres, and the private buckets
+                                (invoice photos, trained models)
+
+ml/                             the predictive models (proposal section 6), separate from the agents
+  features.py                   Model 1 data: cleans verified, product-linked purchases into comparable
+                                unit prices and describes each purchase from earlier ones only
+  train.py                      trains Model 1 for one shop on the team's laptop: baselines, learners,
+                                fair test in time order, saves and uploads the model (see "Model 1")
+  inference.py                  uses a trained Model 1: expected price, range, and the price check
+  output/                       (not in Git) the last trained model and its report, per shop
 
 tests/                          pytest suite (see "Tests")
   conftest.py                   test database, fakes for OpenAI/Storage, fictional invoices, a running API
@@ -48,6 +61,7 @@ tests/                          pytest suite (see "Tests")
   test_agents.py                image preparation, InvoiceVisionAgent, SkuMatchAgent
   test_database.py              database/client.py and the ../database/*.sql files
   test_api.py                   every endpoint end to end
+  test_ml.py                    Model 1: cleaning, inputs, choosing learner vs baseline, range, check
   pglite/                       a throwaway in-memory Postgres + pgvector for the tests
 ```
 
@@ -90,6 +104,9 @@ order in the Supabase SQL editor).
 | GET / POST | `/suppliers` | suppliers |
 | GET / POST | `/suppliers/{id}` | one supplier / change fields such as `credit_days` |
 | GET | `/suppliers/{id}/profile` | totals, invoices, verified item lines and payments |
+| GET | `/analytics/overview` | products with their next expected price, prices outside their range (last year), spend by month and supplier |
+| GET | `/analytics/products/{id}` | one product's unit prices over time with the expected range (keeps the next-purchase prediction in `model_predictions`) |
+| GET | `/analytics/invoices/{id}/price-check` | each line's unit price against its product's expected range |
 | GET | `/payments` | filters: `supplier_id`, `invoice_id`, `status` (`unconfirmed`, `confirmed`, `rejected`) |
 | POST | `/payments` | a payment typed in by hand (unconfirmed; `confirm: true` saves and confirms it) |
 | GET | `/payments/{id}` | one payment, with a link to its receipt photo |
@@ -140,7 +157,31 @@ cd tests\pglite && npm install && cd ..\..
 Test data is fictional. Never commit the shop's real invoices, supplier names or photos: the
 owner's permission letter forbids publishing them, and this repository is public.
 
+## Model 1: Item Price Intelligence
+
+Trained per shop by the team, on a laptop (never on Render), from `backend/` with `backend/.env`
+pointing at that shop's Supabase project:
+
+```bash
+.venv\Scripts\python -m ml.train
+```
+
+It reads the shop's verified, product-linked purchases, cleans them, and tests four methods in time
+order on the last 12 months (each month predicted only from earlier purchases): the latest-price
+and rolling-median baselines, and two scikit-learn learners (ridge and gradient boosting). A
+learner is kept only if its percentage error beats both baselines; otherwise the better baseline is
+the model. The expected range is the 2.5%-97.5% spread of the chosen method's past errors, and a
+price outside it is flagged ("check the unit price and pack size"). Products with fewer than three
+earlier purchases show the median of their prices, labelled as a baseline.
+
+The model file and its report go to `ml/output/<business id>/` (not in Git) and to the shop's
+private `models` bucket in Supabase Storage (`02_storage.sql` creates it), from which the backend
+loads it on first use (restart the API after retraining). `--no-upload` saves locally only. Retrain
+when new invoices have been verified. Until a shop is trained, Purchase Analytics shows the median
+of recent prices as a baseline and checks nothing.
+
 ## Not built yet
 
-Password reset emails, expenses, the Tesseract OCR baseline, Model 1 (item price), Model 2
-(spend forecast) and the cash planner projection.
+Password reset
+emails, expenses, the Tesseract OCR baseline, Model 2 (spend forecast) and the cash planner
+projection.
