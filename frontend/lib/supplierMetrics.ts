@@ -135,10 +135,13 @@ export function defaultRange(profile: SupplierProfile): MonthRange {
   const bounds = dataMonthBounds(profile);
   const last12 = lastNMonths(12);
   if (!bounds) return last12;
-  return {
-    fromMonth: bounds.fromMonth > last12.fromMonth ? bounds.fromMonth : last12.fromMonth,
-    toMonth: bounds.toMonth < last12.toMonth ? bounds.toMonth : last12.toMonth,
-  };
+  const fromMonth = bounds.fromMonth > last12.fromMonth ? bounds.fromMonth : last12.fromMonth;
+  const toMonth = bounds.toMonth < last12.toMonth ? bounds.toMonth : last12.toMonth;
+  // No overlap between the data window and the last 12 months (e.g. all data is
+  // older than 12 months): fall back to the full data window so the dashboard
+  // shows real history instead of an inverted, empty range.
+  if (fromMonth > toMonth) return bounds;
+  return { fromMonth, toMonth };
 }
 
 function inRange(month: string | null, range: MonthRange): boolean {
