@@ -83,11 +83,12 @@ async def dashboard(request: Request) -> Dashboard:
     """Review queue, monthly purchases, supplier spend, payments due and payment reminders."""
     services, business_id = _context(request)
     unconfirmed = await services.db.list_payments(business_id, status="unconfirmed")
-    dashboard = build_dashboard(await services.db.list_all_invoices(business_id), today=date.today(),
-                                unconfirmed=unconfirmed)
+    invoices = await services.db.list_all_invoices(business_id)
+    dashboard = build_dashboard(invoices, today=date.today(), unconfirmed=unconfirmed)
     model = await services.spend_model(business_id)
-    plan = plan_cash(today=date.today(), days=FORECAST_DAYS, invoices=await services.db.list_all_invoices(business_id),
-                     credit_days={s.id: s.credit_days for s in await services.db.list_suppliers(business_id)},
+    suppliers = await services.db.list_suppliers(business_id)
+    plan = plan_cash(today=date.today(), days=FORECAST_DAYS, invoices=invoices,
+                     credit_days={s.id: s.credit_days for s in suppliers},
                      unconfirmed=unconfirmed, model=model)
     spend = plan.period_spend
     dashboard.forecast = DashboardForecast(days=FORECAST_DAYS, expected=spend.expected, low=spend.low, high=spend.high,

@@ -43,15 +43,23 @@ function ChartTip({ tip, onDismiss }: { tip: Tip | null; onDismiss: () => void }
 }
 
 function monthLabel(month: string): string {
+  if (!month || month === "—" || !month.includes("-")) return "—";
   const [y, m] = month.split("-").map(Number);
+  if (isNaN(y) || isNaN(m)) return "—";
   return new Date(y, m - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
 }
 
 function dayLabel(day: string): string {
-  return new Date(`${day}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  if (!day) return "—";
+  const d = new Date(`${day}T12:00:00`);
+  if (isNaN(d.getTime())) return day;
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
 function pieSlicePath(cx: number, cy: number, r: number, start: number, end: number): string {
+  if (end - start >= 2 * Math.PI - 0.001) {
+    return `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx} ${cy + r} A ${r} ${r} 0 1 1 ${cx} ${cy - r} Z`;
+  }
   const x1 = cx + r * Math.cos(start);
   const y1 = cy + r * Math.sin(start);
   const x2 = cx + r * Math.cos(end);

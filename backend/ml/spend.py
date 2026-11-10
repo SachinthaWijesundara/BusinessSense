@@ -108,7 +108,7 @@ def monthly_spend(invoices: list[InvoiceSummary], *, today: date) -> SpendHistor
 def cash_credit_split(invoices: list[InvoiceSummary], *, today: date) -> dict[str, Any]:
     """The cash share of the last year's purchases, only when cash/credit is recorded often enough."""
     recent = [inv for inv in invoices if inv.status == "verified" and inv.invoice_date and inv.total
-              and (today - inv.invoice_date).days <= 365]
+              and 0 <= (today - inv.invoice_date).days <= 365]
     recorded = [inv for inv in recent if inv.payment_type in ("cash", "credit")]
     share = len(recorded) / len(recent) if recent else 0.0
     if not recent or share < SPLIT_RECORDED_SHARE:
@@ -232,11 +232,16 @@ def scores(rows: list[tuple[date, float, float]]) -> dict[str, float]:
             "wape": round(100 * sum(errors) / spend, 2) if spend else float("nan")}
 
 
+def _safe_wape(val: float) -> float:
+    return float("inf") if math.isnan(val) else val
+
+
 def choose(method_scores: dict[str, dict[str, float]]) -> tuple[str, bool]:
     """A learner is kept only if its weighted percentage error beats BOTH baselines."""
-    best_baseline = min(BASELINES, key=lambda name: method_scores[name]["wape"])
-    best_learner = min(LEARNERS, key=lambda name: method_scores[name]["wape"])
-    if all(method_scores[best_learner]["wape"] < method_scores[name]["wape"] for name in BASELINES):
+    best_baseline = min(BASELINES, key=lambda name: _safe_wape(method_scores[name]["wape"]))
+    best_learner = min(LEARNERS, key=lambda name: _safe_wape(method_scores[name]["wape"]))
+    learner_wape = _safe_wape(method_scores[best_learner]["wape"])
+    if math.isfinite(learner_wape) and all(learner_wape < _safe_wape(method_scores[name]["wape"]) for name in BASELINES):
         return best_learner, True
     return best_baseline, False
 

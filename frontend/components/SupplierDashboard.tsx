@@ -381,6 +381,9 @@ function SkuTrendChart({ metrics }: { metrics: SupplierDashboardMetrics }) {
 
 /** Polar arc path for a pie slice (angles in radians from -π/2). */
 function pieSlicePath(cx: number, cy: number, r: number, start: number, end: number): string {
+  if (end - start >= 2 * Math.PI - 0.001) {
+    return `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx} ${cy + r} A ${r} ${r} 0 1 1 ${cx} ${cy - r} Z`;
+  }
   const x1 = cx + r * Math.cos(start);
   const y1 = cy + r * Math.sin(start);
   const x2 = cx + r * Math.cos(end);

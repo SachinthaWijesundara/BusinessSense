@@ -77,6 +77,7 @@ def test_a_learner_is_kept_only_if_it_beats_both_baselines():
 
     assert choose(scored(seasonal=20, rolling=30, exponential=15, lagged=25)) == ("exponential smoothing", True)
     assert choose(scored(seasonal=20, rolling=30, exponential=20, lagged=25)) == ("seasonal naive", False)
+    assert choose(scored(seasonal=float("nan"), rolling=float("nan"), exponential=float("nan"), lagged=float("nan")))[1] is False
 
 
 def test_train_model_2_reports_and_forecasts():
@@ -109,6 +110,9 @@ def test_cash_credit_split_only_when_recorded():
     most = [inv(n, date(2026, 9, 1), 100, payment_type="cash" if n < 3 else "credit") for n in range(10)]
     assert cash_credit_split(most, today=TODAY) | {"note": ""} == {"available": True, "recorded_pct": 100.0,
                                                                   "cash_share_pct": 30.0, "note": ""}
+    # Future-dated invoices must not be counted in recent 1-year lookback
+    future = [inv(1, TODAY + timedelta(days=30), 100, payment_type="cash")]
+    assert cash_credit_split(future, today=TODAY)["available"] is False
 
 
 @pytest.mark.anyio
@@ -138,6 +142,9 @@ def test_new_purchases_fall_due_by_credit_days():
     daily = [(TODAY + timedelta(days=d), 10.0) for d in range(30)]
     assert due_inside(daily, mix, today=TODAY, days=30) == pytest.approx(300 * 0.3)
     assert credit_mix([inv(1, date(2026, 10, 1), 10, supplier="x")], {"x": None}, today=TODAY) == {30: 1.0}
+    # Future-dated invoices must be excluded from credit mix calculation
+    future_inv = inv(3, TODAY + timedelta(days=60), 500, supplier="cash")
+    assert credit_mix([future_inv], {"cash": 0}, today=TODAY) == {30: 1.0}
 
 
 def test_cash_plan_adds_bills_due_and_new_purchases():

@@ -163,14 +163,19 @@ def scores(rows: list[tuple[date, float, float]]) -> dict[str, float]:
             "mape": round(100 * statistics.fmean(err / actual for err, (_, actual, _) in zip(errors, rows, strict=True)), 2)}
 
 
+def _safe_mape(val: float) -> float:
+    return float("inf") if math.isnan(val) else val
+
+
 def choose(method_scores: dict[str, dict[str, float]]) -> tuple[str, bool]:
     """The method to use, and whether it is a learner. A learner is kept only if its percentage
     error is below BOTH baselines'; otherwise the better baseline is used."""
-    best_baseline = min(BASELINES, key=lambda name: method_scores[name]["mape"])
+    best_baseline = min(BASELINES, key=lambda name: _safe_mape(method_scores[name]["mape"]))
     learners = [name for name in LEARNERS if method_scores[name]["predictions"]]
     if learners:
-        best_learner = min(learners, key=lambda name: method_scores[name]["mape"])
-        if all(method_scores[best_learner]["mape"] < method_scores[name]["mape"] for name in BASELINES):
+        best_learner = min(learners, key=lambda name: _safe_mape(method_scores[name]["mape"]))
+        learner_mape = _safe_mape(method_scores[best_learner]["mape"])
+        if math.isfinite(learner_mape) and all(learner_mape < _safe_mape(method_scores[name]["mape"]) for name in BASELINES):
             return best_learner, True
     return best_baseline, False
 

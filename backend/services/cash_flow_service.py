@@ -685,7 +685,7 @@ def credit_mix(invoices: list[InvoiceSummary], credit_days: dict[str, int | None
     """Share of the last year's verified spend by the supplier's credit days (none recorded: 30)."""
     spend: dict[int, float] = {}
     for inv in invoices:
-        if inv.status == "verified" and inv.invoice_date and inv.total and (today - inv.invoice_date).days <= 365:
+        if inv.status == "verified" and inv.invoice_date and inv.total and 0 <= (today - inv.invoice_date).days <= 365:
             days = credit_days.get(inv.supplier_id or "")
             key = ASSUMED_CREDIT_DAYS if days is None else days
             spend[key] = spend.get(key, 0.0) + float(inv.total)

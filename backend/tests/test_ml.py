@@ -90,6 +90,7 @@ def test_a_learner_is_kept_only_if_it_beats_both_baselines():
     assert choose(scored(latest=2.0, rolling=3.0, linear=1.5, gradient=1.8)) == ("linear (ridge)", True)
     assert choose(scored(latest=2.0, rolling=3.0, linear=2.5, gradient=2.0)) == ("latest price", False)  # a tie is not a win
     assert choose(scored(latest=4.0, rolling=3.0, linear=3.5, gradient=5.0)) == ("rolling median", False)
+    assert choose(scored(latest=float("nan"), rolling=float("nan"), linear=float("nan"), gradient=float("nan")))[1] is False
 
 
 def test_steady_prices_keep_the_baseline():

@@ -308,8 +308,9 @@ async def invoice_ingest(image_bytes: bytes, *, services: AppServices, business_
                             "Reading unsuccessful - nothing usable was read. Retake the photo or type it in.",
                             missing_fields=["invoice.lines", "invoice.invoice_date"])
 
-    if supplier is None and _clean(document.supplier.name):
-        matches = await db.find_suppliers_by_name(business_id, document.supplier.name or "")
+    supplier_name = _clean(document.supplier.name)
+    if supplier is None and supplier_name:
+        matches = await db.find_suppliers_by_name(business_id, supplier_name)
         supplier = matches[0] if matches else None
 
     number = _clean(document.invoice.invoice_number)

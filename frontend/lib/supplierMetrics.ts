@@ -99,7 +99,9 @@ export function enumerateMonths(fromMonth: string, toMonth: string): string[] {
 
 /** Short axis label: "Mar 2026". */
 export function monthLabel(month: string): string {
+  if (!month || month === "—" || !month.includes("-")) return "—";
   const [y, m] = month.split("-").map(Number);
+  if (isNaN(y) || isNaN(m)) return "—";
   return new Date(y, m - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
 }
 
@@ -135,10 +137,13 @@ export function defaultRange(profile: SupplierProfile): MonthRange {
   const bounds = dataMonthBounds(profile);
   const last12 = lastNMonths(12);
   if (!bounds) return last12;
-  return {
-    fromMonth: bounds.fromMonth > last12.fromMonth ? bounds.fromMonth : last12.fromMonth,
-    toMonth: bounds.toMonth < last12.toMonth ? bounds.toMonth : last12.toMonth,
-  };
+  const fromMonth = bounds.fromMonth > last12.fromMonth ? bounds.fromMonth : last12.fromMonth;
+  const toMonth = bounds.toMonth < last12.toMonth ? bounds.toMonth : last12.toMonth;
+  // No overlap between the data window and the last 12 months (e.g. all data is
+  // older than 12 months): fall back to the full data window so the dashboard
+  // shows real history instead of an inverted, empty range.
+  if (fromMonth > toMonth) return bounds;
+  return { fromMonth, toMonth };
 }
 
 function inRange(month: string | null, range: MonthRange): boolean {
