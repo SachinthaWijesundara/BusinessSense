@@ -32,7 +32,9 @@ export default function DashboardPage() {
   const [cashError, setCashError] = useState("");
   const [payableDays, setPayableDays] = useState(30);
   const [months, setMonths] = useState(3);
-  const [cashLoading, setCashLoading] = useState(false);
+  const [cashLoadedFor, setCashLoadedFor] = useState("");
+  const cashKey = `${payableDays}:${months}`;
+  const cashLoading = cashLoadedFor !== cashKey;
 
   useEffect(() => {
     getDashboard()
@@ -42,7 +44,6 @@ export default function DashboardPage() {
 
   useEffect(() => {
     let cancelled = false;
-    setCashLoading(true);
     getCashOverview({ payable_days: payableDays, months })
       .then((overview) => {
         if (!cancelled) {
@@ -54,7 +55,7 @@ export default function DashboardPage() {
         if (!cancelled) setCashError(errorMessage(err));
       })
       .finally(() => {
-        if (!cancelled) setCashLoading(false);
+        if (!cancelled) setCashLoadedFor(`${payableDays}:${months}`);
       });
     return () => {
       cancelled = true;

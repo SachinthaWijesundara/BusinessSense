@@ -321,7 +321,9 @@ function SpendPie({ title, slices }: { title: string; slices: SpendSlice[] }) {
   const cx = size / 2;
   const cy = size / 2;
   const r = 72;
-  let angle = -Math.PI / 2;
+  const starts = slices.map((_, i) =>
+    slices.slice(0, i).reduce((sum, s) => sum + Math.max(s.share * Math.PI * 2, 0.001), -Math.PI / 2),
+  );
 
   if (slices.length === 0 || slices.every((s) => s.total <= 0)) {
     return (
@@ -340,9 +342,8 @@ function SpendPie({ title, slices }: { title: string; slices: SpendSlice[] }) {
         <svg viewBox={`0 0 ${size} ${size}`} className="supplier-chart-svg mx-auto max-w-[11rem]" role="img" aria-label={title}>
           {slices.map((slice, index) => {
             const sweep = slice.share * Math.PI * 2;
-            const start = angle;
-            const end = angle + Math.max(sweep, 0.001);
-            angle = end;
+            const start = starts[index];
+            const end = start + Math.max(sweep, 0.001);
             const id = `pie-${title}-${slice.key}`;
             return (
               <path

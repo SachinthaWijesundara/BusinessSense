@@ -5,7 +5,7 @@
  * Charts stay primary; press a mark for the real value. Ledger & payments hold the tables.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { money } from "@/lib/money";
 import {
   buildSupplierDashboard,
@@ -396,7 +396,9 @@ function MonthSkuPieChart({ pie }: { pie: MonthSkuPie }) {
   const cx = size / 2;
   const cy = size / 2;
   const r = 68;
-  let angle = -Math.PI / 2;
+  const starts = pie.slices.map((_, i) =>
+    pie.slices.slice(0, i).reduce((sum, s) => sum + Math.max(s.share * Math.PI * 2, 0.001), -Math.PI / 2),
+  );
 
   if (pie.totalQty <= 0 || pie.slices.length === 0) {
     return (
@@ -423,9 +425,8 @@ function MonthSkuPieChart({ pie }: { pie: MonthSkuPie }) {
         <svg viewBox={`0 0 ${size} ${size}`} className="supplier-chart-svg" role="img" aria-label={`${pie.label} SKU mix`}>
           {pie.slices.map((slice, index) => {
             const sweep = slice.share * Math.PI * 2;
-            const start = angle;
-            const end = angle + Math.max(sweep, 0.001);
-            angle = end;
+            const start = starts[index];
+            const end = start + Math.max(sweep, 0.001);
             const id = `pie-${pie.month}-${slice.key}`;
             const active = tip?.id === id;
             return (
@@ -583,13 +584,15 @@ export function SupplierDashboard({ profile }: { profile: SupplierProfile }) {
   const pieMetrics = useMemo(() => buildSupplierDashboard(profile, pieRange), [profile, pieRange]);
   const { kpis } = metrics;
 
-  useEffect(() => {
-    setPieRange(range);
-  }, [range.fromMonth, range.toMonth]);
+  /** A new charts period also resets the pie charts' period to it. */
+  function changeRange(next: MonthRange) {
+    setRange(next);
+    setPieRange(next);
+  }
 
   return (
     <div className="space-y-4">
-      <RangeControl range={range} onChange={setRange} bounds={bounds} label="Charts period" />
+      <RangeControl range={range} onChange={changeRange} bounds={bounds} label="Charts period" />
 
       <div className="supplier-kpi-grid">
         <Kpi

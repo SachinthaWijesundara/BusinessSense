@@ -57,7 +57,9 @@ function CompactPie({ pie }: { pie: MonthSkuPie }) {
   const cx = size / 2;
   const cy = size / 2;
   const r = 48;
-  let angle = -Math.PI / 2;
+  const starts = pie.slices.map((_, i) =>
+    pie.slices.slice(0, i).reduce((sum, s) => sum + Math.max(s.share * Math.PI * 2, 0.001), -Math.PI / 2),
+  );
   if (pie.totalQty <= 0 || pie.slices.length === 0) {
     return <p className="text-xs text-[var(--muted)]">No SKU mix for {pie.label}.</p>;
   }
@@ -66,9 +68,8 @@ function CompactPie({ pie }: { pie: MonthSkuPie }) {
       <svg viewBox={`0 0 ${size} ${size}`} className="supplier-sheet-pie-svg" role="img" aria-label={`${pie.label} SKU mix`}>
         {pie.slices.map((slice, index) => {
           const sweep = slice.share * Math.PI * 2;
-          const start = angle;
-          const end = angle + Math.max(sweep, 0.001);
-          angle = end;
+          const start = starts[index];
+          const end = start + Math.max(sweep, 0.001);
           return (
             <path key={slice.key} d={pieSlicePath(cx, cy, r, start, end)} fill={PIE_COLOURS[index % PIE_COLOURS.length]}>
               <title>{`${slice.name}: ${slice.quantity} · Rs ${money(slice.spend)}`}</title>
