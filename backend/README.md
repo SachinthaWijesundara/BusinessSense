@@ -40,7 +40,16 @@ services/                       business rules in plain Python (no LLM)
   alias_service.py              product catalogue search (exact name, then embeddings in pgvector)
 
 database/
-  client.py                     every read and write to Supabase Postgres, and the private photo bucket
+  client.py                     every read and write to Supabase Postgres, and the private buckets
+                                (invoice photos, trained models)
+
+ml/                             the predictive models (proposal section 6), separate from the agents
+  features.py                   Model 1 data: cleans verified, product-linked purchases into comparable
+                                unit prices and describes each purchase from earlier ones only
+  train.py                      trains Model 1 for one shop on the team's laptop: baselines, learners,
+                                fair test in time order, saves and uploads the model (see "Model 1")
+  inference.py                  uses a trained Model 1: expected price, range, and the price check
+  output/                       (not in Git) the last trained model and its report, per shop
 
 tests/                          pytest suite (see "Tests")
   conftest.py                   test database, fakes for OpenAI/Storage, fictional invoices, a running API
@@ -48,6 +57,7 @@ tests/                          pytest suite (see "Tests")
   test_agents.py                image preparation, InvoiceVisionAgent, SkuMatchAgent
   test_database.py              database/client.py and the ../database/*.sql files
   test_api.py                   every endpoint end to end
+  test_ml.py                    Model 1: cleaning, inputs, choosing learner vs baseline, range, check
   pglite/                       a throwaway in-memory Postgres + pgvector for the tests
 ```
 
@@ -140,7 +150,29 @@ cd tests\pglite && npm install && cd ..\..
 Test data is fictional. Never commit the shop's real invoices, supplier names or photos: the
 owner's permission letter forbids publishing them, and this repository is public.
 
+## Model 1: Item Price Intelligence
+
+Trained per shop by the team, on a laptop (never on Render), from `backend/` with `backend/.env`
+pointing at that shop's Supabase project:
+
+```bash
+.venv\Scripts\python -m ml.train
+```
+
+It reads the shop's verified, product-linked purchases, cleans them, and tests four methods in time
+order on the last 12 months (each month predicted only from earlier purchases): the latest-price
+and rolling-median baselines, and two scikit-learn learners (ridge and gradient boosting). A
+learner is kept only if its percentage error beats both baselines; otherwise the better baseline is
+the model. The expected range is the 2.5%-97.5% spread of the chosen method's past errors, and a
+price outside it is flagged ("check the unit price and pack size"). Products with fewer than three
+earlier purchases show the median of their prices, labelled as a baseline.
+
+The model file and its report go to `ml/output/<business id>/` (not in Git) and to the shop's
+private `models` bucket in Supabase Storage (`02_storage.sql` creates it), from which the backend
+will load it. `--no-upload` saves locally only. Retrain when new invoices have been verified.
+
 ## Not built yet
 
-Password reset emails, expenses, the Tesseract OCR baseline, Model 1 (item price), Model 2
-(spend forecast) and the cash planner projection.
+Model 1 on the screens (Purchase Analytics and the invoice review's price check), password reset
+emails, expenses, the Tesseract OCR baseline, Model 2 (spend forecast) and the cash planner
+projection.

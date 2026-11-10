@@ -263,6 +263,11 @@ class MemoryStorage:
         """A fake link for stored files."""
         return f"memory://{path}" if path in self.objects else None
 
+    async def download(self, path: str) -> bytes | None:
+        """A stored file's bytes, or None."""
+        found = self.objects.get(path)
+        return found[0] if found else None
+
     async def aclose(self) -> None:
         """Nothing to close."""
 

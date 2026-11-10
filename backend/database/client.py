@@ -6,7 +6,8 @@
                    transaction, so an invoice header and its lines always change together.
                    psycopg's synchronous pool is used and every call runs in a worker thread:
                    psycopg's async mode cannot run on Windows' default event loop.
-3. ``SupabaseStorage``  the private bucket for invoice photos, with short-lived signed links.
+3. ``SupabaseStorage``  the private buckets: invoice photos (short-lived signed links) and trained
+                        models.
 4. ``SupabaseAuth``     owner login through Supabase Auth: sign in, refresh, sign out, and
                         checking a login token. Passwords never reach the database tables.
 
@@ -216,6 +217,22 @@ class SupplierLine(BaseModel):
     product_name: str | None = None
     quantity: float | None = None
     unit_rate: float | None = Field(None, alias="mro", description="Unit rate in rupees.")
+    line_total: float | None = None
+
+
+class PurchaseLine(BaseModel):
+    """One line of a verified invoice that is linked to a catalogue product: what Model 1 learns from.
+
+    ``line_total`` is what was paid for the line (after any line discount, in either data-entry
+    style), so ``line_total / quantity`` is the unit price actually paid.
+    """
+
+    invoice_id: str
+    invoice_date: date | None = None
+    supplier_id: str | None = None
+    product_id: str
+    product_name: str
+    quantity: float | None = None
     line_total: float | None = None
 
 
@@ -933,6 +950,32 @@ class Database:
             (business_id, list(payment_ids)),
         ))
 
+    async def purchase_lines(self, business_id: str, product_id: str | None = None) -> list[PurchaseLine]:
+        """Lines of verified invoices that are linked to a product, oldest first (Model 1's history).
+
+        Drafts, rejected invoices and lines whose product is not confirmed are left out, so the
+        model only learns from checked, product-linked purchases (proposal section 6).
+        """
+        sql = (
+            "select i.id as invoice_id, i.invoice_date, i.supplier_id, l.product_id, p.name as product_name, "
+            "l.quantity, l.line_total from invoice_items l join invoices i on i.id = l.invoice_id "
+            "join products p on p.id = l.product_id "
+            "where i.business_id = %s and i.status = 'verified' and l.product_id is not null"
+        )
+        params: list[Any] = [business_id]
+        if product_id:
+            sql += " and l.product_id = %s"
+            params.append(product_id)
+        rows = await self._run(lambda c: _fetchall(
+            c, sql + " order by i.invoice_date nulls first, i.created_at, i.id, l.sort_order", params
+        ))
+        return [PurchaseLine.model_validate(row) for row in rows]
+
+    async def business_ids(self) -> list[str]:
+        """Every business in this database (one per shop's project), oldest first."""
+        rows = await self._run(lambda c: _fetchall(c, "select id from businesses order by created_at, id"))
+        return [row["id"] for row in rows]
+
     # ---- login ---------------------------------------------------------------------------------
     async def business_for_user(self, user_id: str) -> tuple[str, str] | None:
         """The business (id, name) a Supabase Auth login belongs to, or None."""
@@ -1011,6 +1054,16 @@ class SupabaseStorage:
         )
         if response.status_code >= 400:
             raise StorageError(f"upload failed ({response.status_code}): {response.text[:200]}")
+
+    async def download(self, path: str) -> bytes | None:
+        """One stored file's bytes (e.g. a trained model), or None if it is not there."""
+        response = await self._client.get(f"{self._base}/object/authenticated/{self._object(path)}",
+                                          headers=self._headers)
+        if response.status_code in (400, 404):
+            return None
+        if response.status_code >= 400:
+            raise StorageError(f"download failed ({response.status_code}): {response.text[:200]}")
+        return response.content
 
     async def signed_url(self, path: str, expires_in: int = 3600) -> str | None:
         """A link to view one file for ``expires_in`` seconds, or None if it cannot be made."""

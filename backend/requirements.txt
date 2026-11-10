@@ -12,3 +12,6 @@ numpy==2.5.4
 psycopg[binary]==3.3.8
 psycopg-pool==3.3.3
 httpx==0.28.1
+# Model 1 (item price) and Model 2: scikit-learn learners, saved and loaded with joblib
+scikit-learn==1.9.1
+joblib==1.6.0
