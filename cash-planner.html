@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cash Planner · BusinessSense</title><link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:wght@600;700&display=swap" rel="stylesheet"><link rel="stylesheet" href="styles.css"></head>
+<body><a class="skip" href="#main">Skip to content</a>
+<div class="app"><aside class="rail"><a class="brand" href="index.html">BusinessSense</a><nav aria-label="Main"><a href="index.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h7V4H4v9zm0 7h7v-5H4v5zm9 0h7V11h-7v9zm0-16v5h7V4h-7z"/></svg>Dashboard</a><a href="invoices.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10a2 2 0 0 1 2 2v16l-3-1.5L13 21l-3-1.5L7 21V5a2 2 0 0 1 2-2zm2 5h6v2H9V8zm0 4h6v2H9v-2zm0 4h4v2H9v-2z"/></svg>Invoice Manager</a><a href="#" aria-disabled="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-8 2-8 4v2h16v-2c0-2-4-4-8-4z"/></svg>Supplier Profile</a><a href="#" aria-disabled="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16v2H4v-2zm2-2V9h2v8H6zm5 0V5h2v12h-2zm5 0v-6h2v6h-2z"/></svg>Purchase Analytics</a><a href="cash-planner.html" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v12H3V6zm2 2v8h14V8H5zm7 1.5A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>Cash Planner</a></nav>
+<div class="who">Sri Lanka Hardware<br><a href="login.html">Log out</a></div></aside>
+<main id="main">
+<div class="head"><div><h1>Purchasing Cash Planner</h1>
+<p class="muted">How much to set aside for supplier bills, and for the stock you are likely to buy.</p></div>
+<nav class="seg" aria-label="Planning period"><a href="#">14 days</a><a href="#" aria-current="true">30 days</a><a href="#">60 days</a><a href="#">90 days</a></nav></div>
+
+<div class="panel"><div class="figs"><div class="fig"><b>Rs 1,950,000</b><span>Cash to set aside for 30 days</span></div><div class="fig"><b>Rs 1,284,500</b><span>Supplier bills due</span></div>
+<div class="fig forecast"><b>Rs 665,500</b><span>New purchases falling due</span></div><div class="fig forecast"><b>Rs 2,100,000</b><span>Expected purchases</span><span>Baseline: Rs 1,880,000</span></div></div>
+<p class="note info small" style="margin-top:1.25rem">Expected purchases are a forecast. They sit beside a simple baseline so you can see how far the model moves from last year's pattern.</p></div>
+
+<section aria-labelledby="how"><header><h2 id="how">How the cash to set aside is worked out</h2></header>
+<div class="panel"><p>Supplier bills already due (Rs 1,284,500) plus the part of your expected new purchases that will fall due inside 30 days (Rs 665,500).</p>
+<p class="note small" style="margin-top:1rem">3 payments are waiting for your confirmation. They are shown as an assumed scenario: if you confirm them, you owe Rs 310,000 less.</p></div></section>
+
+<section aria-labelledby="by"><header><h2 id="by">Bills falling due, by date</h2></header>
+<div class="scroll"><table><thead><tr><th>Due</th><th>Supplier</th><th>Invoice</th><th class="right">Still owed</th><th class="right">Payment waiting</th></tr></thead><tbody>
+<tr><td>Today <span class="tag bad">includes 2 overdue</span></td><td>2 suppliers</td><td>LC-20418, KP-7731</td><td class="right">228,500</td><td class="right">0</td></tr>
+<tr><td>14 Nov <span class="tag warn">in 3 days</span></td><td>Ceylon Hardware Wholesale</td><td>CHW-5590</td><td class="right">240,000</td><td class="right">120,000</td></tr>
+<tr><td>17 Nov <span class="tag warn">in 6 days</span></td><td>Jaffna Pipe and Fittings</td><td>JPF-1182</td><td class="right">118,000</td><td class="right">0</td></tr></tbody></table></div></section>
+</main></div></body></html>

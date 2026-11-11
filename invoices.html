@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Invoice Manager · BusinessSense</title><link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:wght@600;700&display=swap" rel="stylesheet"><link rel="stylesheet" href="styles.css"></head>
+<body><a class="skip" href="#main">Skip to content</a>
+<div class="app"><aside class="rail"><a class="brand" href="index.html">BusinessSense</a><nav aria-label="Main"><a href="index.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h7V4H4v9zm0 7h7v-5H4v5zm9 0h7V11h-7v9zm0-16v5h7V4h-7z"/></svg>Dashboard</a><a href="invoices.html" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10a2 2 0 0 1 2 2v16l-3-1.5L13 21l-3-1.5L7 21V5a2 2 0 0 1 2-2zm2 5h6v2H9V8zm0 4h6v2H9v-2zm0 4h4v2H9v-2z"/></svg>Invoice Manager</a><a href="#" aria-disabled="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-8 2-8 4v2h16v-2c0-2-4-4-8-4z"/></svg>Supplier Profile</a><a href="#" aria-disabled="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16v2H4v-2zm2-2V9h2v8H6zm5 0V5h2v12h-2zm5 0v-6h2v6h-2z"/></svg>Purchase Analytics</a><a href="cash-planner.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v12H3V6zm2 2v8h14V8H5zm7 1.5A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>Cash Planner</a></nav>
+<div class="who">Sri Lanka Hardware<br><a href="login.html">Log out</a></div></aside>
+<main id="main">
+<div class="head"><div><h1>Invoice Manager</h1>
+<p class="muted">Every supplier invoice in one place. Photos are read for you, and you check them before they count.</p></div>
+<a class="btn ghost" href="#">Type an invoice in</a></div>
+
+<section id="upload" style="margin-top:0" aria-labelledby="up"><div class="drop"><h2 id="up">Add a photo of an invoice or a payment receipt</h2>
+<p class="muted" style="margin:.4rem 0 1rem">Take it flat, in good light, with all four edges showing.</p>
+<label class="btn" for="f" style="display:inline-block">Choose a photo</label><input id="f" type="file" accept="image/*" style="position:absolute;opacity:0;width:1px"></div></section>
+
+<section aria-labelledby="reg"><header><h2 id="reg">Invoice register</h2><p class="muted">Showing 5 of 148</p></header>
+<form class="filters" role="search" aria-label="Filter invoices"><div><label for="sp">Supplier</label><select id="sp"><option>All suppliers</option><option>Kandy Paints</option></select></div>
+<div><label for="no">Invoice number</label><input id="no" placeholder="For example LC-20418"></div>
+<div><label for="st">Review status</label><select id="st"><option>All</option><option>Needs review</option><option>Verified</option></select></div>
+<div><label for="py">Payment</label><select id="py"><option>All</option><option>Unpaid</option><option>Paid</option></select></div>
+<div><label for="fd">From</label><input id="fd" type="date"></div><div><label for="td">To</label><input id="td" type="date"></div>
+<button class="btn" type="submit">Apply filters</button></form>
+<div class="scroll" style="margin-top:1.25rem"><table><thead><tr><th>Supplier</th><th>Invoice</th><th>Date</th><th class="right">Total (Rs)</th><th>Review</th><th>Maths</th><th>Payment</th><th></th></tr></thead><tbody><tr><td>Lanka Cement Traders</td><td>LC-20418</td><td>3 Oct 2026</td><td class="right">142,500</td><td><span class="tag warn">Needs review</span></td><td><span class="tag good">adds up</span></td><td>Unpaid</td><td><a href="invoice-review.html">Review</a></td></tr><tr><td>Kandy Paints</td><td>KP-7731</td><td>12 Oct 2026</td><td class="right">120,000</td><td><span class="tag good">Verified</span></td><td><span class="tag good">adds up</span></td><td>Part paid</td><td><a href="invoice-review.html">Open</a></td></tr><tr><td>Ceylon Hardware Wholesale</td><td>CHW-5590</td><td>20 Oct 2026</td><td class="right">240,000</td><td><span class="tag warn">Needs review</span></td><td><span class="tag bad">check</span></td><td>Unpaid</td><td><a href="invoice-review.html">Review</a></td></tr><tr><td>Jaffna Pipe and Fittings</td><td>JPF-1182</td><td>27 Oct 2026</td><td class="right">118,000</td><td><span class="tag good">Verified</span></td><td><span class="tag good">adds up</span></td><td>Unpaid</td><td><a href="invoice-review.html">Open</a></td></tr><tr><td>Kandy Paints</td><td>KP-7702</td><td>29 Sep 2026</td><td class="right">64,200</td><td><span class="tag good">Verified</span></td><td><span class="tag good">adds up</span></td><td>Paid</td><td><a href="invoice-review.html">Open</a></td></tr></tbody></table></div></section>
+</main></div></body></html>
