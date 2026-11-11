@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Review invoice · BusinessSense</title><link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:wght@600;700&display=swap" rel="stylesheet"><link rel="stylesheet" href="styles.css"></head>
+<body><a class="skip" href="#main">Skip to content</a>
+<div class="app"><aside class="rail"><a class="brand" href="index.html">BusinessSense</a><nav aria-label="Main"><a href="index.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h7V4H4v9zm0 7h7v-5H4v5zm9 0h7V11h-7v9zm0-16v5h7V4h-7z"/></svg>Dashboard</a><a href="invoices.html" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10a2 2 0 0 1 2 2v16l-3-1.5L13 21l-3-1.5L7 21V5a2 2 0 0 1 2-2zm2 5h6v2H9V8zm0 4h6v2H9v-2zm0 4h4v2H9v-2z"/></svg>Invoice Manager</a><a href="#" aria-disabled="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-8 2-8 4v2h16v-2c0-2-4-4-8-4z"/></svg>Supplier Profile</a><a href="#" aria-disabled="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16v2H4v-2zm2-2V9h2v8H6zm5 0V5h2v12h-2zm5 0v-6h2v6h-2z"/></svg>Purchase Analytics</a><a href="cash-planner.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v12H3V6zm2 2v8h14V8H5zm7 1.5A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>Cash Planner</a></nav>
+<div class="who">Sri Lanka Hardware<br><a href="login.html">Log out</a></div></aside>
+<main id="main">
+<p class="small"><a href="invoices.html">Back to Invoice Manager</a></p>
+<div class="head" style="margin-top:.5rem"><div><h1>Invoice CHW-5590</h1>
+<p style="margin-top:.5rem;display:flex;gap:.4rem;flex-wrap:wrap"><span class="tag warn">Needs review</span><span class="tag">Read from photo</span><span class="tag bad">Maths does not add up</span><span class="tag">Due 14 Nov 2026</span></p></div></div>
+
+<div class="note" role="alert"><b>Before you can verify this invoice</b><ul style="margin:.4rem 0 0;padding-left:1.2rem"><li>Fix the total: the lines add up to Rs 238,400, but the invoice says Rs 240,000.</li><li>Link 2 items to products.</li></ul></div>
+
+<div class="review" style="margin-top:1.5rem">
+<div class="sheet" role="img" aria-label="Photo of the invoice"><b>CEYLON HARDWARE WHOLESALE</b><br>Invoice CHW-5590 &nbsp; 20/10/2026<hr>
+Cement 50kg x 120 &nbsp; 1,980 &nbsp; 237,600<br>PVC pipe 1" x 40 &nbsp; 410 &nbsp; 16,400<br>Wire nails 3" x 25 &nbsp; 360 &nbsp; 9,000<hr>Discount &nbsp; -24,600<br>Total &nbsp; <mark>240,000</mark></div>
+<div>
+<section style="margin:0" aria-labelledby="chk"><h2 id="chk">What the checks found</h2>
+<ul class="checks" style="margin-top:.75rem"><li class="bad">Lines minus discount come to Rs 238,400. The total reads Rs 240,000.</li><li class="warn">The date on the photo is hard to read: please check 20 Oct 2026.</li><li>Supplier matched to Ceylon Hardware Wholesale.</li></ul></section>
+
+<section aria-labelledby="vals"><h2 id="vals">Invoice values</h2><p class="hint">Type values exactly as printed. Saving a change moves a verified invoice back to review.</p>
+<div class="filters" style="margin-top:.75rem"><div><label for="v1">Invoice number</label><input id="v1" value="CHW-5590"></div><div><label for="v2">Invoice date</label><input id="v2" type="date" value="2026-10-20"></div>
+<div><label for="v3">Special discount (Rs)</label><input id="v3" value="24,600"></div><div><label for="v4">Total (Rs)</label><input id="v4" value="240,000" aria-describedby="v4h"><p class="hint" id="v4h">Expected 238,400</p></div></div></section>
+
+<section aria-labelledby="ln"><h2 id="ln">Items on this invoice</h2>
+<div class="scroll" style="margin-top:.5rem"><table><thead><tr><th>Printed as</th><th class="right">Qty</th><th class="right">Rate</th><th>Product</th><th>Price check</th></tr></thead><tbody>
+<tr><td>Cement 50kg</td><td class="right">120</td><td class="right">1,980</td><td><span class="tag good">Linked</span> Cement 50 kg bag</td><td><span class="tag good">In the usual range</span></td></tr>
+<tr><td>PVC pipe 1"</td><td class="right">40</td><td class="right">410</td><td><span class="tag warn">Please confirm</span><details class="match"><summary>Is this the same as one of these?</summary>
+<label><input type="radio" name="m1" checked> PVC pipe 25 mm, 3 m (91% match)</label><label><input type="radio" name="m1"> PVC pipe 32 mm, 3 m (84% match)</label><label><input type="radio" name="m1"> None of these: add a new product</label></details></td>
+<td><span class="tag bad">18% above the usual range</span><p class="hint">Check the invoice, then ask the supplier if it looks wrong.</p></td></tr>
+<tr><td>Wire nails 3"</td><td class="right">25</td><td class="right">360</td><td><span class="tag">Not matched yet</span></td><td><span class="tag">Not checked</span></td></tr></tbody></table></div></section>
+
+<div class="actions"><button class="btn" type="button" disabled style="opacity:.5;cursor:not-allowed" aria-describedby="why">Verify invoice</button>
+<button class="btn ghost" type="button">Save changes</button><button class="btn danger" type="button">Reject invoice</button><span class="hint" id="why" style="align-self:center">Fix the total and link the items first.</span></div>
+</div></div>
+</main></div></body></html>
