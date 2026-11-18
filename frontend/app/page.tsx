@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import { DashboardCharts } from "@/components/DashboardCharts";
 import { errorMessage, getCashOverview, getDashboard } from "@/lib/api";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { IconAlert, IconCheck, IconClock, IconInvoice } from "@/components/ui/Icons";
+import { IconAnalytics, IconCheck, IconClock } from "@/components/ui/Icons";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageSkeleton, SkeletonCard } from "@/components/ui/Skeleton";
 import { StatCard } from "@/components/ui/StatCard";
@@ -66,44 +66,81 @@ export default function DashboardPage() {
   }
   if (!dashboard) return <PageSkeleton />;
 
+  const overdue = dashboard.payments_due.filter((due) => due.days_left < 0);
+  const overdueCount = overdue.length;
+  const overdueOwed = overdue.reduce((sum, due) => sum + (due.still_owed ?? 0), 0);
+  const owedTotal = dashboard.payments_due.reduce((sum, due) => sum + (due.still_owed ?? 0), 0);
+
   return (
     <div className="space-y-5">
       <PageHeader
         title="Dashboard"
-        description="Verified invoices only, so every figure traces back to a checked bill."
+        description="Here is what needs your attention. Verified invoices only, so every figure traces back to a checked bill."
+        actions={
+          <Link href="/invoice-manager" className="btn btn-primary">
+            + Add invoice
+          </Link>
+        }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="bs-card bs-attention" aria-label="What needs your attention">
+        <Link href="/invoice-manager?status=draft" className="bs-attention-item">
+          <span className={`bs-dot ${dashboard.review_queue > 0 ? "tone-warn" : "tone-good"}`} aria-hidden="true" />
+          <span>
+            <span className="block font-semibold">
+              {dashboard.review_queue} {dashboard.review_queue === 1 ? "invoice" : "invoices"} to review
+            </span>
+            <span className="block text-sm text-[var(--muted)]">
+              {dashboard.review_queue > 0 ? "Drafts waiting for you" : "All caught up"}
+            </span>
+          </span>
+        </Link>
+        <div className="bs-attention-item">
+          <span className={`bs-dot ${overdueCount > 0 ? "tone-bad" : "tone-good"}`} aria-hidden="true" />
+          <span>
+            <span className="block font-semibold">
+              {overdueCount} {overdueCount === 1 ? "bill" : "bills"} overdue
+            </span>
+            <span className="block text-sm text-[var(--muted)]">
+              {overdueCount > 0 ? `Rs ${money(overdueOwed)} still owed` : "Nothing overdue"}
+            </span>
+          </span>
+        </div>
+        <Link href="/supplier-profile" className="bs-attention-item">
+          <span className={`bs-dot ${dashboard.unconfirmed_payments > 0 ? "tone-warn" : "tone-good"}`} aria-hidden="true" />
+          <span>
+            <span className="block font-semibold">
+              {dashboard.unconfirmed_payments} {dashboard.unconfirmed_payments === 1 ? "payment" : "payments"} to confirm
+            </span>
+            <span className="block text-sm text-[var(--muted)]">
+              {dashboard.unconfirmed_payments > 0 ? "Not counted as paid yet" : "Nothing waiting"}
+            </span>
+          </span>
+        </Link>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-3">
         <StatCard
-          label="Waiting for review"
-          value={String(dashboard.review_queue)}
-          icon={<IconInvoice />}
-          tone={dashboard.review_queue > 0 ? "warn" : "default"}
-          note={dashboard.review_queue > 0 ? "Draft invoices to check" : "All caught up"}
-          cta={dashboard.review_queue > 0 ? "Review now" : undefined}
-          href="/invoice-manager?status=draft"
+          label="Bills due (next 30 days)"
+          value={`Rs ${money(owedTotal)}`}
+          icon={<IconClock />}
+          tone={overdueCount > 0 ? "bad" : "default"}
+          note={`${dashboard.payments_due.length} ${dashboard.payments_due.length === 1 ? "bill" : "bills"}${overdueCount > 0 ? `, ${overdueCount} overdue` : ""}`}
+        />
+        <StatCard
+          label="Cash to set aside"
+          value={dashboard.forecast ? `Rs ${money(dashboard.forecast.reserve)}` : "—"}
+          icon={<IconAnalytics />}
+          tone="info"
+          note={dashboard.forecast ? "Bills due plus expected purchases" : dashboard.forecast_note}
+          cta="Open the Cash Planner"
+          href="/cash-planner"
         />
         <StatCard
           label="Verified invoices"
           value={String(dashboard.verified_invoices)}
           icon={<IconCheck />}
-          note="Counted in every figure below"
-        />
-        <StatCard
-          label="Payments due (30 days)"
-          value={String(dashboard.payments_due.length)}
-          icon={<IconClock />}
-          tone={dashboard.payments_due.some((due) => due.days_left < 0) ? "bad" : "info"}
-          note={dashboard.payments_due.some((due) => due.days_left < 0) ? "Some are overdue" : "Supplier bills coming up"}
-        />
-        <StatCard
-          label="Payments to confirm"
-          value={String(dashboard.unconfirmed_payments)}
-          icon={<IconAlert />}
-          tone={dashboard.unconfirmed_payments > 0 ? "warn" : "default"}
-          note={dashboard.unconfirmed_payments > 0 ? "Not counted as paid yet" : "Nothing waiting"}
-          cta={dashboard.unconfirmed_payments > 0 ? "Confirm them" : undefined}
-          href="/supplier-profile"
+          note="Every figure traces to a checked bill"
         />
       </div>
 

@@ -164,8 +164,13 @@ export function AppShell({ children }: { children: ReactNode }) {
 
           <div className="bs-nav-footer">
             <div className="bs-nav-account">
-              <p className="truncate text-sm font-semibold text-white">{session.business_name}</p>
-              <p className="truncate text-xs text-[#a8c4b6]">{session.email}</p>
+              <span className="bs-nav-avatar" aria-hidden="true">
+                {(session.business_name ?? "?").trim().charAt(0).toUpperCase() || "?"}
+              </span>
+              <div className="bs-nav-account-text">
+                <p className="truncate text-sm font-semibold">{session.business_name}</p>
+                <p className="truncate text-xs text-[var(--muted)]">{session.email}</p>
+              </div>
             </div>
             <button type="button" className="bs-nav-btn bs-nav-pin" onClick={() => writePinned(!pinned)} aria-pressed={pinned} title={pinned ? "Collapse menu" : "Keep menu open"}>
               <IconChevronsRight className="bs-nav-icon" />
