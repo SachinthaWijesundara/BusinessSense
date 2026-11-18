@@ -18,6 +18,10 @@ import { PaymentList } from "@/components/PaymentList";
 import { SkuPurchasesTable } from "@/components/SkuPurchasesTable";
 import { SupplierDashboard } from "@/components/SupplierDashboard";
 import { SupplierForm } from "@/components/SupplierForm";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { IconSearch, IconSupplier } from "@/components/ui/Icons";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { PageSkeleton, Skeleton } from "@/components/ui/Skeleton";
 import {
   errorMessage,
   getSupplierProfile,
@@ -170,6 +174,7 @@ function ProfileView({ supplierId, refreshKey, onChanged }: { supplierId: string
   const [actionError, setActionError] = useState("");
   const [adding, setAdding] = useState<"" | "typed" | "photo">("");
   const [notice, setNotice] = useState("");
+  const [tab, setTab] = useState<"payments" | "invoices" | "skus">("payments");
   const requestKey = `${supplierId}:${version}:${refreshKey}`;
 
   // Load (or reload) the profile whenever the supplier, version or a payment elsewhere changes.
@@ -206,7 +211,7 @@ function ProfileView({ supplierId, refreshKey, onChanged }: { supplierId: string
   }
 
   if (!result || (result.key !== requestKey && !result.profile)) {
-    return <p className="text-[var(--muted)]">Loading supplier…</p>;
+    return <PageSkeleton stats={0} />;
   }
   if (result.error) return <p className="banner-error">{result.error}</p>;
   const profile = result.profile;
@@ -219,8 +224,13 @@ function ProfileView({ supplierId, refreshKey, onChanged }: { supplierId: string
         <Link href="/supplier-profile" className="text-sm text-[var(--brand)] hover:underline">
           ← All suppliers
         </Link>
-        <h2 className="mt-2 text-xl font-semibold text-[var(--brand-deep)]">{supplier.name}</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">
+        <div className="mt-3 flex items-center gap-3">
+          <span className="bs-avatar" aria-hidden="true">
+            {supplier.name.trim().charAt(0).toUpperCase() || "?"}
+          </span>
+          <h1 className="bs-page-title">{supplier.name}</h1>
+        </div>
+        <p className="mt-2 text-sm text-[var(--muted)]">
           {[supplier.phone1, supplier.phone2, supplier.email, supplier.address].filter(Boolean).join(" · ") ||
             "No contact details."}
         </p>
@@ -234,9 +244,29 @@ function ProfileView({ supplierId, refreshKey, onChanged }: { supplierId: string
       {actionError ? <p className="banner-error">{actionError}</p> : null}
       {notice ? <p className="banner-ok">{notice}</p> : null}
 
-      <details className="bs-card supplier-ledger">
-        <summary className="mb-0">Ledger &amp; payments</summary>
-        <div className="mt-4 space-y-4 border-t border-[var(--line)] pt-4">
+      <section className="bs-card">
+        <div className="bs-tabs" role="tablist" aria-label="Supplier ledger">
+          {(
+            [
+              ["payments", `Payments (${profile.payments.length})`],
+              ["invoices", "Invoices"],
+              ["skus", "Purchases by SKU"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              className={`bs-tab${tab === id ? " is-active" : ""}`}
+              onClick={() => setTab(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="mt-4 space-y-4" role="tabpanel">
+          {tab === "payments" ? (
           <div className="overflow-x-auto">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm font-semibold text-[var(--brand-deep)]">Payments</p>
@@ -288,7 +318,9 @@ function ProfileView({ supplierId, refreshKey, onChanged }: { supplierId: string
               }}
             />
           </div>
+          ) : null}
 
+          {tab === "invoices" ? (
           <div className="overflow-x-auto">
             <p className="mb-2 text-sm font-semibold text-[var(--brand-deep)]">Invoices</p>
             <table className="entry-table">
@@ -346,10 +378,11 @@ function ProfileView({ supplierId, refreshKey, onChanged }: { supplierId: string
               </tbody>
             </table>
           </div>
+          ) : null}
 
-          <SkuPurchasesPanel profile={profile} />
+          {tab === "skus" ? <SkuPurchasesPanel profile={profile} /> : null}
         </div>
-      </details>
+      </section>
     </div>
   );
 }
@@ -364,6 +397,7 @@ function SupplierProfileScreen() {
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const [paymentsVersion, setPaymentsVersion] = useState(0);
+  const [filter, setFilter] = useState("");
 
   // Load the supplier list (again after a supplier is added or changed).
   useEffect(() => {
@@ -406,19 +440,17 @@ function SupplierProfileScreen() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-[var(--brand-deep)]">Supplier Profile</h1>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Choose a supplier for a full-screen purchasing dashboard (SKUs, spend, payables).
-          </p>
-        </div>
-        {!adding ? (
-          <button type="button" className="btn btn-primary" onClick={() => setAdding(true)}>
-            Add supplier
-          </button>
-        ) : null}
-      </div>
+      <PageHeader
+        title="Supplier Profile"
+        description="Choose a supplier for a full-screen purchasing dashboard (SKUs, spend, payables)."
+        actions={
+          !adding ? (
+            <button type="button" className="btn btn-primary" onClick={() => setAdding(true)}>
+              Add supplier
+            </button>
+          ) : null
+        }
+      />
 
       {adding ? (
         <div className="bs-card max-w-2xl">
@@ -430,24 +462,73 @@ function SupplierProfileScreen() {
 
       <WaitingPayments refreshKey={paymentsVersion} onChanged={() => setPaymentsVersion((current) => current + 1)} />
 
-      <div className="bs-card !p-2">
+      <div className="bs-card space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="bs-card-title">
+            Suppliers{suppliers ? ` (${suppliers.length})` : ""}
+          </p>
+          {suppliers && suppliers.length > 0 ? (
+            <label className="relative block w-full sm:w-72">
+              <span className="sr-only">Find a supplier</span>
+              <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />
+              <input
+                className="field !pl-8"
+                placeholder="Find a supplier"
+                value={filter}
+                onChange={(event) => setFilter(event.target.value)}
+              />
+            </label>
+          ) : null}
+        </div>
         {suppliers === null ? (
-          <p className="p-2 text-sm text-[var(--muted)]">Loading suppliers…</p>
-        ) : suppliers.length === 0 ? (
-          <p className="p-2 text-sm text-[var(--muted)]">No suppliers yet.</p>
-        ) : (
-          <ul className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
-            {suppliers.map((supplier) => (
-              <li key={supplier.id}>
-                <Link
-                  href={`/supplier-profile?supplier=${supplier.id}`}
-                  className="block rounded px-3 py-2 text-sm hover:bg-[#eef5f1]"
-                >
-                  {supplier.name}
-                </Link>
-              </li>
+          <div className="bs-supplier-grid" role="status" aria-label="Loading suppliers">
+            {Array.from({ length: 6 }, (_, index) => (
+              <Skeleton key={index} className="h-16" />
             ))}
-          </ul>
+          </div>
+        ) : suppliers.length === 0 ? (
+          <EmptyState
+            title="No suppliers yet"
+            icon={<IconSupplier />}
+            actions={
+              !adding ? (
+                <button type="button" className="btn btn-primary" onClick={() => setAdding(true)}>
+                  Add your first supplier
+                </button>
+              ) : null
+            }
+          >
+            Add the shops and distributors you buy from. Invoices and payments are grouped under each one.
+          </EmptyState>
+        ) : (
+          (() => {
+            const needle = filter.trim().toLowerCase();
+            const shown = needle ? suppliers.filter((supplier) => supplier.name.toLowerCase().includes(needle)) : suppliers;
+            if (shown.length === 0) {
+              return <p className="py-4 text-center text-sm text-[var(--muted)]">No supplier matches “{filter.trim()}”.</p>;
+            }
+            return (
+              <ul className="bs-supplier-grid">
+                {shown.map((supplier) => (
+                  <li key={supplier.id}>
+                    <Link href={`/supplier-profile?supplier=${supplier.id}`} className="bs-supplier-card">
+                      <span className="bs-avatar" aria-hidden="true">
+                        {supplier.name.trim().charAt(0).toUpperCase() || "?"}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate font-semibold text-[var(--brand-deep)]">{supplier.name}</span>
+                        <span className="block text-xs text-[var(--muted)]">
+                          {supplier.credit_days !== null && supplier.credit_days !== undefined
+                            ? `${supplier.credit_days} credit days`
+                            : "No credit days set"}
+                        </span>
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            );
+          })()
         )}
       </div>
     </div>
@@ -457,7 +538,7 @@ function SupplierProfileScreen() {
 /** Supplier Profile page; Suspense is needed because the screen reads ?supplier= from the address. */
 export default function SupplierProfilePage() {
   return (
-    <Suspense fallback={<p className="text-[var(--muted)]">Loading…</p>}>
+    <Suspense fallback={<PageSkeleton stats={0} />}>
       <SupplierProfileScreen />
     </Suspense>
   );

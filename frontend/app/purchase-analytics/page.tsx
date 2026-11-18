@@ -9,6 +9,10 @@
  */
 
 import Link from "next/link";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { IconAnalytics, IconCheck } from "@/components/ui/Icons";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { PageSkeleton, SkeletonCard } from "@/components/ui/Skeleton";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { PriceChart } from "@/components/PriceChart";
@@ -86,7 +90,7 @@ function ProductDetail({ productId, today, onClose }: { productId: string; today
     };
   }, [productId]);
 
-  if (!result || result.id !== productId) return <div className="bs-card text-sm text-[var(--muted)]">Loading product…</div>;
+  if (!result || result.id !== productId) return <SkeletonCard lines={6} height={300} />;
   if (result.error || !result.history) return <p className="banner-error">{result.error}</p>;
   const { product, points } = result.history;
   const newestFirst = [...points].reverse();
@@ -195,13 +199,13 @@ function AnalyticsScreen() {
 
   if (error) {
     return (
-      <div>
-        <h1 className="text-2xl font-semibold text-[var(--brand-deep)]">Purchase Analytics</h1>
-        <p className="banner-error mt-4">{error}</p>
+      <div className="space-y-4">
+        <PageHeader title="Purchase Analytics" />
+        <p className="banner-error">{error}</p>
       </div>
     );
   }
-  if (!overview) return <p className="text-[var(--muted)]">Loading Purchase Analytics…</p>;
+  if (!overview) return <PageSkeleton stats={0} />;
 
   const needle = filter.trim().toLowerCase();
   const products = needle ? overview.products.filter((p) => p.product_name.toLowerCase().includes(needle)) : overview.products;
@@ -210,13 +214,10 @@ function AnalyticsScreen() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-semibold text-[var(--brand-deep)]">Purchase Analytics</h1>
-        <p className="mt-1 text-sm text-[var(--muted)]">
-          Prices paid for each product over time, Model 1&apos;s expected range, and prices that fell outside it. Verified
-          invoices only.
-        </p>
-      </div>
+      <PageHeader
+        title="Purchase Analytics"
+        description="Prices paid for each product over time, Model 1's expected range, and prices that fell outside it. Verified invoices only."
+      />
 
       <ModelCard model={overview.model} />
 
@@ -231,16 +232,23 @@ function AnalyticsScreen() {
         ) : null}
       </div>
 
-      <div className="bs-card overflow-x-auto">
-        <p className="text-sm font-semibold text-[var(--brand-deep)]">Prices to check (last 12 months)</p>
+      <div className={`bs-card overflow-x-auto ${overview.flagged.length > 0 ? "bs-card-warn" : ""}`}>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="bs-card-title">Prices to check (last 12 months)</p>
+          {overview.flagged.length > 0 ? <span className="badge badge-warn">{overview.flagged.length} to look at</span> : null}
+        </div>
         <p className="mb-2 mt-1 text-sm text-[var(--muted)]">
           A unit price outside its expected range. Check the unit price and pack size against the invoice and, if needed,
           with the supplier.
         </p>
         {overview.flagged.length === 0 ? (
-          <p className="text-sm text-[var(--muted)]">
+          <EmptyState
+            className="mt-3"
+            title={overview.model.trained ? "No unusual prices" : "Price checks are not on yet"}
+            icon={overview.model.trained ? <IconCheck /> : <IconAnalytics />}
+          >
             {overview.model.trained ? "No price fell outside its expected range." : "Prices are checked once Model 1 is trained."}
-          </p>
+          </EmptyState>
         ) : (
           <>
             <table className="entry-table">
@@ -379,7 +387,7 @@ function AnalyticsScreen() {
 /** Purchase Analytics page; Suspense is needed because the screen reads ?product= from the address. */
 export default function PurchaseAnalyticsPage() {
   return (
-    <Suspense fallback={<p className="text-[var(--muted)]">Loading…</p>}>
+    <Suspense fallback={<PageSkeleton stats={0} />}>
       <AnalyticsScreen />
     </Suspense>
   );

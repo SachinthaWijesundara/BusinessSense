@@ -10,6 +10,11 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { IconCash, IconCheck, IconClock, IconAnalytics } from "@/components/ui/Icons";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { PageSkeleton } from "@/components/ui/Skeleton";
+import { StatCard } from "@/components/ui/StatCard";
 import { errorMessage, getCashPlan } from "@/lib/api";
 import { money } from "@/lib/money";
 import type { CashPlan } from "@/lib/types";
@@ -17,14 +22,20 @@ import type { CashPlan } from "@/lib/types";
 const PERIODS = [14, 30, 60, 90];
 
 /** One headline figure. */
-function Figure({ label, value, note }: { label: string; value: string; note?: string }) {
-  return (
-    <div className="bs-card !p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-[var(--brand-deep)]">{value}</p>
-      {note ? <p className="mt-1 text-xs text-[var(--muted)]">{note}</p> : null}
-    </div>
-  );
+function Figure({
+  label,
+  value,
+  note,
+  icon,
+  tone,
+}: {
+  label: string;
+  value: string;
+  note?: string;
+  icon: React.ReactNode;
+  tone?: "default" | "warn" | "bad" | "info";
+}) {
+  return <StatCard label={label} value={value} note={note} icon={icon} tone={tone} />;
 }
 
 /** The whole planner. */
@@ -53,30 +64,28 @@ export default function CashPlannerPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-[var(--brand-deep)]">Purchasing Cash Planner</h1>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Supplier bills falling due, expected purchases, and the cash to set aside for them.
-          </p>
-        </div>
-        <div className="flex gap-1" role="group" aria-label="Planning period">
-          {PERIODS.map((period) => (
-            <button
-              key={period}
-              type="button"
-              className={`btn ${period === days ? "btn-primary" : "btn-secondary"}`}
-              aria-pressed={period === days}
-              onClick={() => setDays(period)}
-            >
-              {period} days
-            </button>
-          ))}
-        </div>
-      </div>
+      <PageHeader
+        title="Purchasing Cash Planner"
+        description="Supplier bills falling due, expected purchases, and the cash to set aside for them."
+        actions={
+          <div className="flex gap-1" role="group" aria-label="Planning period">
+            {PERIODS.map((period) => (
+              <button
+                key={period}
+                type="button"
+                className={`btn ${period === days ? "btn-primary" : "btn-secondary"}`}
+                aria-pressed={period === days}
+                onClick={() => setDays(period)}
+              >
+                {period} days
+              </button>
+            ))}
+          </div>
+        }
+      />
 
       {result?.error ? <p className="banner-error">{result.error}</p> : null}
-      {!plan ? <p className="text-[var(--muted)]">Loading the plan…</p> : null}
+      {!plan && !result?.error ? <PageSkeleton /> : null}
 
       {plan ? (
         <div className={`space-y-5 ${loading ? "opacity-60" : ""}`}>
@@ -96,40 +105,62 @@ export default function CashPlannerPage() {
 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Figure
+              icon={<IconCash />}
               label={`Cash to set aside (${plan.days} days)`}
               value={`Rs ${money(plan.reserve)}`}
               note={plan.reserve_high !== null ? `Up to Rs ${money(plan.reserve_high)} if purchases run high` : undefined}
             />
             <Figure
+              icon={<IconClock />}
+              tone={plan.overdue > 0 ? "bad" : "info"}
               label="Supplier bills due"
               value={`Rs ${money(plan.bills_due)}`}
               note={plan.overdue > 0 ? `Rs ${money(plan.overdue)} of it is already overdue` : "Nothing overdue"}
             />
             <Figure
+              icon={<IconCheck />}
+              tone="info"
               label="New purchases falling due"
               value={`Rs ${money(plan.new_purchases_due.expected)}`}
               note={`${plan.new_purchases_due.share_due_pct}% of the purchases expected in the period`}
             />
             <Figure
+              icon={<IconAnalytics />}
+              tone="info"
               label={`Expected purchases${plan.period_spend.is_baseline ? " (baseline)" : ""}`}
               value={`Rs ${money(plan.period_spend.expected)}`}
               note={`Baseline (${plan.period_spend.baseline_name}): Rs ${money(plan.period_spend.baseline)}`}
             />
           </div>
 
-          <div className="bs-card space-y-1 text-sm">
-            <p className="font-semibold text-[var(--brand-deep)]">How the cash to set aside is worked out</p>
-            <p>
-              Bills still owed that fall due by {plan.period_end} (overdue ones included): <strong>Rs {money(plan.bills_due)}</strong>
-            </p>
-            <p>
-              + new purchases expected in the period that fall due inside it: <strong>Rs {money(plan.new_purchases_due.expected)}</strong>
-            </p>
+          <div className="bs-card space-y-3 text-sm">
+            <p className="bs-card-title">How the cash to set aside is worked out</p>
+            <div className="bs-worked">
+              <div className="bs-worked-row">
+                <span>
+                  Bills still owed that fall due by {plan.period_end} (overdue ones included)
+                </span>
+                <strong className="tabular">Rs {money(plan.bills_due)}</strong>
+              </div>
+              <div className="bs-worked-row">
+                <span>
+                  <span className="bs-worked-op">+</span>New purchases expected in the period that fall due inside it
+                </span>
+                <strong className="tabular">Rs {money(plan.new_purchases_due.expected)}</strong>
+              </div>
+              <div className="bs-worked-row is-total">
+                <span>
+                  <span className="bs-worked-op">=</span>Cash to set aside
+                  {plan.reserve_baseline !== plan.reserve ? (
+                    <span className="ml-2 text-xs font-normal text-[var(--muted)]">
+                      (with the baseline forecast: Rs {money(plan.reserve_baseline)})
+                    </span>
+                  ) : null}
+                </span>
+                <strong className="tabular">Rs {money(plan.reserve)}</strong>
+              </div>
+            </div>
             <p className="text-xs text-[var(--muted)]">{plan.new_purchases_due.note}</p>
-            <p>
-              = <strong>Rs {money(plan.reserve)}</strong>
-              {plan.reserve_baseline !== plan.reserve ? ` (with the baseline forecast: Rs ${money(plan.reserve_baseline)})` : ""}
-            </p>
             {plan.unconfirmed_total > 0 ? (
               <p className="banner-partial mt-2">
                 Rs {money(plan.unconfirmed_total)} of these bills has payments waiting for your confirmation. If they are real,
@@ -151,9 +182,9 @@ export default function CashPlannerPage() {
 
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="bs-card">
-              <p className="mb-3 text-sm font-semibold text-[var(--brand-deep)]">Bills falling due, by date</p>
+              <p className="bs-card-title mb-3">Bills falling due, by date</p>
               {plan.due_by_day.length === 0 ? (
-                <p className="text-sm text-[var(--muted)]">No supplier bills fall due in this period.</p>
+                <EmptyState title="No bills fall due" icon={<IconCheck />}>No supplier bills fall due in this period.</EmptyState>
               ) : (
                 <ul className="space-y-2">
                   {plan.due_by_day.map((day) => (
@@ -174,7 +205,7 @@ export default function CashPlannerPage() {
             </div>
 
             <div className="bs-card overflow-x-auto">
-              <p className="mb-3 text-sm font-semibold text-[var(--brand-deep)]">Expected purchases by month</p>
+              <p className="bs-card-title mb-3">Expected purchases by month</p>
               <table className="entry-table">
                 <thead>
                   <tr>
@@ -211,7 +242,7 @@ export default function CashPlannerPage() {
           <div className="bs-card overflow-x-auto">
             <p className="mb-2 text-sm font-semibold text-[var(--brand-deep)]">Supplier bills to pay by {plan.period_end}</p>
             {plan.obligations.length === 0 ? (
-              <p className="text-sm text-[var(--muted)]">Nothing to pay in this period.</p>
+              <EmptyState title="Nothing to pay" icon={<IconCheck />}>No supplier bills need paying in this period.</EmptyState>
             ) : (
               <table className="entry-table">
                 <thead>
