@@ -11,6 +11,10 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { DocumentUpload } from "@/components/DocumentUpload";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { IconFile } from "@/components/ui/Icons";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { SkeletonTable } from "@/components/ui/Skeleton";
 import { errorMessage, listInvoicePage, listSuppliers } from "@/lib/api";
 import { money } from "@/lib/money";
 import type { InvoiceQuery, InvoiceStatus, InvoiceSummary, PaymentStatus, Supplier } from "@/lib/types";
@@ -159,83 +163,96 @@ export function InvoiceList() {
 
   return (
     <div>
-      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-[var(--brand-deep)]">Invoice Manager</h1>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Upload a photo or type an invoice in. Every invoice stays a draft until you verify it.
-          </p>
-        </div>
-        <Link href="/invoice-manager/new" className="btn btn-primary">
-          Type in an invoice
-        </Link>
-      </div>
+      <PageHeader
+        title="Invoice Manager"
+        description="Upload a photo or type an invoice in. Every invoice stays a draft until you verify it."
+        actions={
+          <Link href="/invoice-manager/new" className="btn btn-secondary">
+            Type in an invoice
+          </Link>
+        }
+      />
 
       <DocumentUpload className="mb-5" />
 
-      <form onSubmit={search} className="bs-card mb-4 grid gap-3 !p-4 sm:grid-cols-3 lg:grid-cols-7">
-        <select
-          className="field"
-          value={filters.supplier_id}
-          onChange={(event) => setFilters({ ...filters, supplier_id: event.target.value })}
-          aria-label="Supplier"
-        >
-          <option value="">All suppliers</option>
-          {suppliers.map((supplier) => (
-            <option key={supplier.id} value={supplier.id}>
-              {supplier.name}
-            </option>
-          ))}
-        </select>
-        <input
-          className="field"
-          placeholder="Invoice number"
-          value={filters.invoice_number}
-          onChange={(event) => setFilters({ ...filters, invoice_number: event.target.value })}
-        />
-        <select
-          className="field"
-          value={filters.status}
-          onChange={(event) => setFilters({ ...filters, status: event.target.value as InvoiceStatus | "" })}
-          aria-label="Review status"
-        >
-          <option value="">Any status</option>
-          {STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {status}
-            </option>
-          ))}
-        </select>
-        <select
-          className="field"
-          value={filters.payment_status}
-          onChange={(event) => setFilters({ ...filters, payment_status: event.target.value })}
-          aria-label="Payment status"
-        >
-          <option value="">Any payment</option>
-          {PAYMENT_STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {status}
-            </option>
-          ))}
-        </select>
-        <input
-          className="field"
-          type="date"
-          aria-label="From date"
-          value={filters.date_from}
-          onChange={(event) => setFilters({ ...filters, date_from: event.target.value })}
-        />
-        <input
-          className="field"
-          type="date"
-          aria-label="To date"
-          value={filters.date_to}
-          onChange={(event) => setFilters({ ...filters, date_to: event.target.value })}
-        />
-        <button className="btn btn-secondary" type="submit">
-          Search
-        </button>
+      <form onSubmit={search} className="bs-card bs-filters mb-4" aria-label="Search invoices">
+        <label className="span-2">
+          <span>Supplier</span>
+          <select
+            className="field"
+            value={filters.supplier_id}
+            onChange={(event) => setFilters({ ...filters, supplier_id: event.target.value })}
+          >
+            <option value="">All suppliers</option>
+            {suppliers.map((supplier) => (
+              <option key={supplier.id} value={supplier.id}>
+                {supplier.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Invoice number</span>
+          <input
+            className="field"
+            placeholder="e.g. 10452"
+            value={filters.invoice_number}
+            onChange={(event) => setFilters({ ...filters, invoice_number: event.target.value })}
+          />
+        </label>
+        <label>
+          <span>Review status</span>
+          <select
+            className="field"
+            value={filters.status}
+            onChange={(event) => setFilters({ ...filters, status: event.target.value as InvoiceStatus | "" })}
+          >
+            <option value="">Any status</option>
+            {STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Payment</span>
+          <select
+            className="field"
+            value={filters.payment_status}
+            onChange={(event) => setFilters({ ...filters, payment_status: event.target.value })}
+          >
+            <option value="">Any payment</option>
+            {PAYMENT_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="bs-filters-actions">
+          <button className="btn btn-primary w-full" type="submit">
+            Search
+          </button>
+        </div>
+        <label className="span-2">
+          <span>From date</span>
+          <input
+            className="field"
+            type="date"
+            value={filters.date_from}
+            onChange={(event) => setFilters({ ...filters, date_from: event.target.value })}
+          />
+        </label>
+        <label className="span-2">
+          <span>To date</span>
+          <input
+            className="field"
+            type="date"
+            value={filters.date_to}
+            onChange={(event) => setFilters({ ...filters, date_to: event.target.value })}
+          />
+        </label>
       </form>
 
       {result?.error ? <p className="banner-error mb-4">{result.error}</p> : null}
@@ -258,14 +275,24 @@ export function InvoiceList() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8} className="px-3 py-6 text-[var(--muted)]">
-                  Loading…
+                <td colSpan={8} className="!p-0">
+                  <SkeletonTable rows={6} columns={6} />
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-3 py-6 text-[var(--muted)]">
-                  No invoices match. Upload a photo or type one in.
+                <td colSpan={8} className="!p-4">
+                  <EmptyState
+                    title="No invoices match"
+                    icon={<IconFile />}
+                    actions={
+                      <Link href="/invoice-manager/new" className="btn btn-secondary">
+                        Type in an invoice
+                      </Link>
+                    }
+                  >
+                    Change the filters, or upload a photo above to add your first invoice.
+                  </EmptyState>
                 </td>
               </tr>
             ) : (
@@ -277,7 +304,7 @@ export function InvoiceList() {
                   </td>
                   <td className="px-2 py-2">{invoice.invoice_number ?? "—"}</td>
                   <td className="px-2 py-2">{invoice.invoice_date ?? "—"}</td>
-                  <td className="px-2 py-2 text-right">{money(invoice.total)}</td>
+                  <td className="px-2 py-2 text-right tabular font-medium">{money(invoice.total)}</td>
                   <td className="px-2 py-2">
                     <StatusBadge status={invoice.status} />
                   </td>
@@ -290,11 +317,17 @@ export function InvoiceList() {
                       <span className="badge badge-bad">check</span>
                     )}
                   </td>
-                  <td className="px-2 py-2">{invoice.payment_status}</td>
+                  <td className="px-2 py-2">
+                    <span
+                      className={`badge ${invoice.payment_status === "paid" ? "badge-good" : invoice.payment_status === "unconfirmed" ? "badge-warn" : ""}`}
+                    >
+                      {invoice.payment_status}
+                    </span>
+                  </td>
                   <td className="px-2 py-2 text-right">
                     <Link
                       href={`/invoice-manager/${invoice.id}`}
-                      className="text-sm font-medium text-[var(--brand)] hover:underline"
+                      className="btn btn-secondary !min-h-8 !px-3 !py-1 text-sm"
                     >
                       Open
                     </Link>

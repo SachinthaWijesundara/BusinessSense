@@ -1,16 +1,29 @@
 "use client";
 
 /**
- * Sidebar navigation for the five screens in the proposal, around the current screen.
- * Desktop: collapsed icon rail that expands with labels on hover/focus. Mobile: full labels.
+ * Page frame around every screen: sidebar, mobile top bar and drawer, breadcrumbs, skip link.
+ * Desktop: an icon rail that slides open over the page on hover/focus, with a button to pin it
+ * open (remembered in this browser). Mobile: a top bar with a menu button that opens a drawer.
  * Every screen needs a login: without one the login page opens (and comes back afterwards).
  */
 
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { logout, parseSession, readSessionText, subscribeSession } from "@/lib/api";
+import {
+  IconAnalytics,
+  IconCash,
+  IconChevronsRight,
+  IconClose,
+  IconDashboard,
+  IconInvoice,
+  IconLogout,
+  IconMenu,
+  IconSupplier,
+} from "@/components/ui/Icons";
+import { PageSkeleton } from "@/components/ui/Skeleton";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: IconDashboard },
@@ -21,61 +34,54 @@ const NAV = [
 ] as const;
 
 const NOT_READ_YET = "not-read-yet";
+const PIN_KEY = "bs-nav-pinned";
+const PIN_EVENT = "bs-nav-pinned-change";
 
-function IconDashboard() {
-  return (
-    <svg className="bs-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 13h7V4H4v9zm0 7h7v-5H4v5zm9 0h7V11h-7v9zm0-16v5h7V4h-7z" fill="currentColor" />
-    </svg>
-  );
+/** Pinned-open preference, kept in this browser only. */
+function subscribePinned(onChange: () => void) {
+  window.addEventListener(PIN_EVENT, onChange);
+  window.addEventListener("storage", onChange);
+  return () => {
+    window.removeEventListener(PIN_EVENT, onChange);
+    window.removeEventListener("storage", onChange);
+  };
 }
 
-function IconInvoice() {
-  return (
-    <svg className="bs-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M7 3h10a2 2 0 0 1 2 2v16l-3-1.5L13 21l-3-1.5L7 21V5a2 2 0 0 1 2-2zm2 5h6v2H9V8zm0 4h6v2H9v-2zm0 4h4v2H9v-2z"
-        fill="currentColor"
-      />
-    </svg>
-  );
+function readPinned(): boolean {
+  try {
+    return window.localStorage.getItem(PIN_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
-function IconSupplier() {
-  return (
-    <svg className="bs-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-8 2-8 4v2h16v-2c0-2-4-4-8-4z"
-        fill="currentColor"
-      />
-    </svg>
-  );
+function writePinned(value: boolean) {
+  try {
+    window.localStorage.setItem(PIN_KEY, value ? "1" : "0");
+  } catch {
+    // Storage blocked: the rail still works, it just forgets the choice.
+  }
+  window.dispatchEvent(new Event(PIN_EVENT));
 }
 
-function IconAnalytics() {
-  return (
-    <svg className="bs-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 19h16v2H4v-2zm2-2V9h2v8H6zm5 0V5h2v12h-2zm5 0v-6h2v6h-2z" fill="currentColor" />
-    </svg>
-  );
+/** Where the current path sits: the screen it belongs to, plus a trail for nested screens. */
+function screenInfo(pathname: string) {
+  const section = NAV.find((item) => (item.href === "/" ? pathname === "/" : pathname === item.href || pathname.startsWith(`${item.href}/`)));
+  let nested: string | null = null;
+  if (pathname === "/invoice-manager/new") nested = "Type in an invoice";
+  else if (section?.href === "/invoice-manager" && pathname !== "/invoice-manager") nested = "Review invoice";
+  return { section, nested };
 }
 
-function IconCash() {
-  return (
-    <svg className="bs-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M3 6h18v12H3V6zm2 2v8h14V8H5zm7 1.5A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5zM6 10h1.5v4H6v-4zm10.5 0H18v4h-1.5v-4z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
-
-/** Page frame: icon rail + main screen. */
+/** Page frame: sidebar + main screen. */
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const stored = useSyncExternalStore(subscribeSession, readSessionText, () => NOT_READ_YET);
+  const pinned = useSyncExternalStore(subscribePinned, readPinned, () => false);
+  // The drawer is open only for the path it was opened on, so moving to another screen closes it.
+  const [drawerPath, setDrawerPath] = useState<string | null>(null);
+  const drawerOpen = drawerPath === pathname;
   const known = stored !== NOT_READ_YET;
   const session = known ? parseSession(stored) : null;
   const onLoginPage = pathname === "/login";
@@ -84,69 +90,111 @@ export function AppShell({ children }: { children: ReactNode }) {
     if (known && !session && !onLoginPage) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
   }, [known, session, onLoginPage, pathname, router]);
 
+  // Escape closes the mobile drawer.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDrawerPath(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawerOpen]);
+
   if (onLoginPage) return <>{children}</>;
   if (!session) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <p className="text-[var(--muted)]">Checking your login…</p>
+      <div className="bs-main">
+        <div className="bs-content">
+          <PageSkeleton stats={0} />
+        </div>
       </div>
     );
   }
 
+  const { section, nested } = screenInfo(pathname);
+  const shellClass = `bs-shell${pinned ? " is-pinned" : ""}${drawerOpen ? " is-drawer-open" : ""}`;
+
   return (
-    <div className="bs-shell">
-      <aside className="bs-nav flex flex-col" tabIndex={-1}>
-        <div className="bs-nav-brand mb-6 px-1">
-          <p className="bs-nav-brand-mark">
-            <Image src="/businesssense-icon.png" alt="BusinessSense" width={36} height={36} className="rounded-md" priority />
-          </p>
-          <div className="bs-nav-label-block">
-            <p className="flex items-center gap-2 text-lg font-semibold tracking-wide text-white">
-              <Image src="/businesssense-icon.png" alt="" width={32} height={32} className="rounded-md" />
-              BusinessSense
-            </p>
-            <p className="mt-1 text-xs text-[#a8c4b6]">Owner app · purchasing intelligence</p>
+    <div className={shellClass}>
+      <a href="#main" className="bs-skip">
+        Skip to content
+      </a>
+
+      <header className="bs-topbar">
+        <button type="button" className="bs-icon-btn" onClick={() => setDrawerPath(pathname)} aria-label="Open menu" aria-expanded={drawerOpen}>
+          <IconMenu className="h-6 w-6" />
+        </button>
+        <span className="bs-topbar-title">{section?.label ?? "BusinessSense"}</span>
+      </header>
+
+      <aside className="bs-nav" aria-label="Main navigation">
+        <div className="bs-nav-panel">
+          <div className="bs-nav-brand">
+            <Image src="/businesssense-icon.png" alt="" width={34} height={34} priority />
+            <span className="bs-nav-label">BusinessSense</span>
+            <button
+              type="button"
+              className="bs-icon-btn bs-drawer-close"
+              onClick={() => setDrawerPath(null)}
+              aria-label="Close menu"
+            >
+              <IconClose className="h-5 w-5" />
+            </button>
           </div>
-        </div>
-        <nav className="flex flex-col gap-1">
-          {NAV.map((item) => {
-            const active =
-              item.href === "/"
-                ? pathname === "/"
-                : pathname === item.href || pathname.startsWith(`${item.href}/`);
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={active ? "active bs-nav-link" : "bs-nav-link"}
-                title={item.label}
-              >
-                <Icon />
-                <span className="bs-nav-label">{item.label}</span>
-              </Link>
-            );
-          })}
-        </nav>
-        <div className="bs-nav-footer mt-auto border-t border-[rgb(255_255_255/15%)] px-1 pt-4">
-          <div className="bs-nav-label-block">
-            <p className="text-sm font-semibold text-white">{session.business_name}</p>
-            <p className="mt-0.5 break-all text-xs text-[#a8c4b6]">{session.email}</p>
+
+          <p className="bs-nav-section">Workspace</p>
+          <nav className="flex flex-col">
+            {NAV.map((item) => {
+              const active = section?.href === item.href;
+              const Icon = item.icon;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={active ? "active bs-nav-link" : "bs-nav-link"}
+                  aria-current={active ? "page" : undefined}
+                  title={item.label}
+                >
+                  <Icon className="bs-nav-icon" />
+                  <span className="bs-nav-label">{item.label}</span>
+                </Link>
+              );
+            })}
+          </nav>
+
+          <div className="bs-nav-footer">
+            <div className="bs-nav-account">
+              <p className="truncate text-sm font-semibold text-white">{session.business_name}</p>
+              <p className="truncate text-xs text-[#a8c4b6]">{session.email}</p>
+            </div>
+            <button type="button" className="bs-nav-btn bs-nav-pin" onClick={() => writePinned(!pinned)} aria-pressed={pinned} title={pinned ? "Collapse menu" : "Keep menu open"}>
+              <IconChevronsRight className="bs-nav-icon" />
+              <span className="bs-nav-label">{pinned ? "Collapse menu" : "Keep menu open"}</span>
+            </button>
+            <button type="button" className="bs-nav-btn" onClick={() => void logout()} title="Log out">
+              <IconLogout className="bs-nav-icon" />
+              <span className="bs-nav-label">Log out</span>
+            </button>
           </div>
-          <button
-            type="button"
-            className="bs-nav-logout mt-3 w-full rounded border border-[rgb(255_255_255/25%)] px-2 py-1.5 text-sm text-[#e8f2ec] hover:bg-[rgb(255_255_255/8%)]"
-            onClick={() => void logout()}
-            title="Log out"
-          >
-            <span className="bs-nav-logout-icon" aria-hidden="true">
-              ⎋
-            </span>
-            <span className="bs-nav-label">Log out</span>
-          </button>
         </div>
       </aside>
-      <main className="bs-main">{children}</main>
+
+      <div className="bs-scrim" onClick={() => setDrawerPath(null)} aria-hidden="true" />
+
+      <main id="main" className="bs-main" tabIndex={-1}>
+        <div className="bs-content" key={pathname}>
+          {section && nested ? (
+            <nav className="bs-crumbs" aria-label="Breadcrumb">
+              <Link href="/">Home</Link>
+              <span aria-hidden="true">/</span>
+              <Link href={section.href}>{section.label}</Link>
+              <span aria-hidden="true">/</span>
+              <span aria-current="page">{nested}</span>
+            </nav>
+          ) : null}
+          {children}
+        </div>
+      </main>
     </div>
   );
 }

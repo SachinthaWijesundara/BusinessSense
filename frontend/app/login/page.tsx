@@ -8,6 +8,7 @@
  */
 
 import { useRouter, useSearchParams } from "next/navigation";
+import Image from "next/image";
 import { Suspense, useEffect, useState, useSyncExternalStore, type FormEvent } from "react";
 import { errorMessage, login, parseSession, readSessionText, subscribeSession } from "@/lib/api";
 
@@ -53,12 +54,20 @@ function LoginForm() {
   }
 
   return (
-    <form onSubmit={submit} className="bs-card w-full max-w-sm space-y-4">
+    <form onSubmit={submit} className="bs-card w-full max-w-sm space-y-4 !p-7" style={{ boxShadow: "var(--shadow-md)" }}>
       <div>
-        <p className="text-2xl font-semibold text-[var(--brand-deep)]">BusinessSense</p>
+        <p className="flex items-center gap-2 text-xl font-semibold text-[var(--brand-deep)] min-[900px]:hidden">
+          <Image src="/businesssense-icon.png" alt="" width={30} height={30} className="rounded-md" />
+          BusinessSense
+        </p>
+        <h1 className="mt-2 text-2xl font-semibold text-[var(--brand-deep)] min-[900px]:mt-0">Welcome back</h1>
         <p className="mt-1 text-sm text-[var(--muted)]">Log in to your shop.</p>
       </div>
-      {error ? <p className="banner-error">{error}</p> : null}
+      {error ? (
+        <p className="banner-error" role="alert">
+          {error}
+        </p>
+      ) : null}
       <label className="block">
         <span className="mb-1 block text-sm font-medium">Email</span>
         <input
@@ -80,7 +89,14 @@ function LoginForm() {
         />
       </label>
       <button className="btn btn-primary w-full" type="submit" disabled={busy}>
-        {busy ? "Logging in…" : "Log in"}
+        {busy ? (
+          <>
+            <span className="extract-spinner !h-4 !w-4 !border-2 !border-white/40 !border-t-white" aria-hidden="true" />
+            Logging in…
+          </>
+        ) : (
+          "Log in"
+        )}
       </button>
       <p className="text-xs text-[var(--muted)]">
         Logins are created by the BusinessSense team. Forgot your password? Ask the team to reset it.
@@ -92,10 +108,38 @@ function LoginForm() {
 /** Login page; Suspense is needed because the form reads ?next= from the address. */
 export default function LoginPage() {
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
-      <Suspense fallback={<p className="text-[var(--muted)]">Loading…</p>}>
-        <LoginForm />
-      </Suspense>
+    <div className="bs-login">
+      <aside className="bs-login-aside">
+        <p className="flex items-center gap-3 text-xl font-semibold text-white">
+          <Image src="/businesssense-icon.png" alt="" width={40} height={40} className="rounded-md" priority />
+          BusinessSense
+        </p>
+        <div>
+          <p className="max-w-md text-3xl font-semibold leading-tight text-white">
+            Know what you owe, what you paid and what to set aside.
+          </p>
+          <ul className="bs-login-points mt-6 max-w-md">
+            <li>
+              <span>1</span>
+              <span>Every invoice stays a draft until you check and verify it.</span>
+            </li>
+            <li>
+              <span>2</span>
+              <span>Unusual prices are flagged for you to look at, never changed for you.</span>
+            </li>
+            <li>
+              <span>3</span>
+              <span>The cash planner shows its working, so you can see where each figure comes from.</span>
+            </li>
+          </ul>
+        </div>
+        <p className="text-sm text-[#86ad9b]">Owner app · purchasing intelligence</p>
+      </aside>
+      <div className="bs-login-main">
+        <Suspense fallback={<div className="bs-skeleton h-72 w-full max-w-sm" />}>
+          <LoginForm />
+        </Suspense>
+      </div>
     </div>
   );
 }

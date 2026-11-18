@@ -34,7 +34,7 @@ export function ImagePreviewModal({ url, title, loading = false, error = "", onC
           </button>
         </div>
         <div className="image-preview-body">
-          {loading ? <p className="text-sm text-[var(--muted)]">Loading image…</p> : null}
+          {loading ? <div className="extract-spinner" role="status" aria-label="Loading image" /> : null}
           {error ? <p className="banner-error">{error}</p> : null}
           {!loading && !error && url ? (
             // eslint-disable-next-line @next/next/no-img-element

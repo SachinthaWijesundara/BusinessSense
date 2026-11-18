@@ -13,6 +13,10 @@ import { InvoiceForm, type InvoiceFormValues } from "@/components/InvoiceForm";
 import { StatusBadge } from "@/components/InvoiceList";
 import { ItemAutocomplete } from "@/components/ItemAutocomplete";
 import { SupplierForm } from "@/components/SupplierForm";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { IconFile } from "@/components/ui/Icons";
+import { SkeletonCard, Skeleton } from "@/components/ui/Skeleton";
+import { useToast } from "@/components/ui/Toast";
 import {
   ApiError,
   confirmSku,
@@ -83,6 +87,7 @@ function PriceCheckCell({ check }: { check: LineCheck | undefined }) {
 
 /** The whole review screen for one invoice. */
 export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
+  const toast = useToast();
   const [data, setData] = useState<Loaded | null>(null);
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -133,7 +138,7 @@ export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
       const invoice = await action();
       const [events, products] = await Promise.all([getInvoiceEvents(invoiceId), listProducts()]);
       setData((current) => (current ? { ...current, invoice, events, products } : current));
-      setNotice({ tone: "ok", text: successText });
+      toast.ok(successText);
     } catch (error) {
       if (error instanceof ApiError && error.reasons) setReasons(error.reasons);
       setNotice({ tone: "error", text: errorMessage(error) });
@@ -217,7 +222,17 @@ export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
       </div>
     );
   }
-  if (!data) return <p className="text-[var(--muted)]">Loading invoice…</p>;
+  if (!data) {
+    return (
+      <div className="space-y-4" role="status" aria-live="polite" aria-label="Loading invoice">
+        <Skeleton className="h-8 w-72 max-w-full" />
+        <div className="grid gap-4 lg:grid-cols-2">
+          <SkeletonCard lines={6} height={360} />
+          <SkeletonCard lines={8} height={360} />
+        </div>
+      </div>
+    );
+  }
 
   const { invoice, products, suppliers, events } = data;
   const checks = priceChecks?.version === invoiceVersion ? priceChecks.rows : [];
@@ -228,10 +243,7 @@ export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link href="/invoice-manager" className="text-sm text-[var(--brand)] hover:underline">
-            ← Invoice Manager
-          </Link>
-          <h1 className="mt-1 text-2xl font-semibold text-[var(--brand-deep)]">
+          <h1 className="bs-page-title">
             {supplierName} · {invoice.invoice_number ?? "no number"}
           </h1>
           <div className="mt-2 flex flex-wrap gap-2">
@@ -254,7 +266,11 @@ export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
         </div>
       </div>
 
-      {notice ? <p className={notice.tone === "ok" ? "banner-ok" : "banner-error"}>{notice.text}</p> : null}
+      {notice ? (
+        <p className={notice.tone === "ok" ? "banner-ok" : "banner-error"} role={notice.tone === "ok" ? "status" : "alert"}>
+          {notice.text}
+        </p>
+      ) : null}
       {reasons.length > 0 ? (
         <div className="banner-partial">
           <p className="font-semibold">Before this invoice can be verified:</p>
@@ -268,7 +284,7 @@ export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="bs-card !p-3">
-          <p className="mb-2 text-sm font-semibold text-[var(--brand-deep)]">Invoice photo</p>
+          <p className="bs-card-title mb-2">Invoice photo</p>
           {invoice.image_url ? (
             <a href={invoice.image_url} target="_blank" rel="noreferrer">
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -279,9 +295,9 @@ export function InvoiceReview({ invoiceId }: { invoiceId: string }) {
               />
             </a>
           ) : (
-            <div className="bs-empty text-sm">
-              {invoice.source === "manual" ? "Typed in by hand, no photo." : "No photo stored for this invoice."}
-            </div>
+            <EmptyState title={invoice.source === "manual" ? "Typed in by hand" : "No photo stored"} icon={<IconFile />}>
+              {invoice.source === "manual" ? "This invoice has no photo because it was entered manually." : "There is no photo saved for this invoice."}
+            </EmptyState>
           )}
         </div>
 

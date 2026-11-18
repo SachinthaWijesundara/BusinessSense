@@ -10,19 +10,13 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { DashboardCharts } from "@/components/DashboardCharts";
 import { errorMessage, getCashOverview, getDashboard } from "@/lib/api";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { IconAlert, IconCheck, IconClock, IconInvoice } from "@/components/ui/Icons";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { PageSkeleton, SkeletonCard } from "@/components/ui/Skeleton";
+import { StatCard } from "@/components/ui/StatCard";
 import { money } from "@/lib/money";
 import type { CashOverview, Dashboard } from "@/lib/types";
-
-/** One headline number with its label. */
-function Stat({ label, value, href }: { label: string; value: string; href?: string }) {
-  const body = (
-    <div className="bs-card !p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-[var(--brand-deep)]">{value}</p>
-    </div>
-  );
-  return href ? <Link href={href}>{body}</Link> : body;
-}
 
 /** The dashboard: what needs attention first, then cash / purchase charts. */
 export default function DashboardPage() {
@@ -64,26 +58,53 @@ export default function DashboardPage() {
 
   if (error) {
     return (
-      <div>
-        <h1 className="text-2xl font-semibold text-[var(--brand-deep)]">Dashboard</h1>
-        <p className="banner-error mt-4">{error}</p>
+      <div className="space-y-4">
+        <PageHeader title="Dashboard" />
+        <p className="banner-error">{error}</p>
       </div>
     );
   }
-  if (!dashboard) return <p className="text-[var(--muted)]">Loading dashboard…</p>;
+  if (!dashboard) return <PageSkeleton />;
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-semibold text-[var(--brand-deep)]">Dashboard</h1>
-        <p className="mt-1 text-sm text-[var(--muted)]">Verified invoices only, so every figure traces back to a checked bill.</p>
-      </div>
+      <PageHeader
+        title="Dashboard"
+        description="Verified invoices only, so every figure traces back to a checked bill."
+      />
 
-      <div className="grid gap-4 sm:grid-cols-4">
-        <Stat label="Waiting for review" value={String(dashboard.review_queue)} href="/invoice-manager?status=draft" />
-        <Stat label="Verified invoices" value={String(dashboard.verified_invoices)} />
-        <Stat label="Payments due (30 days)" value={String(dashboard.payments_due.length)} />
-        <Stat label="Payments to confirm" value={String(dashboard.unconfirmed_payments)} href="/supplier-profile" />
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="Waiting for review"
+          value={String(dashboard.review_queue)}
+          icon={<IconInvoice />}
+          tone={dashboard.review_queue > 0 ? "warn" : "default"}
+          note={dashboard.review_queue > 0 ? "Draft invoices to check" : "All caught up"}
+          cta={dashboard.review_queue > 0 ? "Review now" : undefined}
+          href="/invoice-manager?status=draft"
+        />
+        <StatCard
+          label="Verified invoices"
+          value={String(dashboard.verified_invoices)}
+          icon={<IconCheck />}
+          note="Counted in every figure below"
+        />
+        <StatCard
+          label="Payments due (30 days)"
+          value={String(dashboard.payments_due.length)}
+          icon={<IconClock />}
+          tone={dashboard.payments_due.some((due) => due.days_left < 0) ? "bad" : "info"}
+          note={dashboard.payments_due.some((due) => due.days_left < 0) ? "Some are overdue" : "Supplier bills coming up"}
+        />
+        <StatCard
+          label="Payments to confirm"
+          value={String(dashboard.unconfirmed_payments)}
+          icon={<IconAlert />}
+          tone={dashboard.unconfirmed_payments > 0 ? "warn" : "default"}
+          note={dashboard.unconfirmed_payments > 0 ? "Not counted as paid yet" : "Nothing waiting"}
+          cta={dashboard.unconfirmed_payments > 0 ? "Confirm them" : undefined}
+          href="/supplier-profile"
+        />
       </div>
 
       {dashboard.payment_reminders.length > 0 ? (
@@ -118,13 +139,13 @@ export default function DashboardPage() {
           loading={cashLoading}
         />
       ) : (
-        <p className="text-sm text-[var(--muted)]">Loading cash charts…</p>
+        <SkeletonCard lines={6} height={320} />
       )}
 
       <div className="bs-card overflow-x-auto">
-        <p className="mb-2 text-sm font-semibold text-[var(--brand-deep)]">Supplier payments due soon</p>
+        <p className="bs-card-title mb-3">Supplier payments due soon</p>
         {dashboard.payments_due.length === 0 ? (
-          <p className="text-sm text-[var(--muted)]">Nothing due in the next 30 days.</p>
+          <EmptyState title="Nothing due in the next 30 days" icon={<IconCheck />}>Supplier bills that fall due will be listed here.</EmptyState>
         ) : (
           <table className="entry-table">
             <thead>

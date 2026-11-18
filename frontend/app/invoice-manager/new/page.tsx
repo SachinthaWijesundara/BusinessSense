@@ -9,6 +9,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { InvoiceForm, type InvoiceFormValues } from "@/components/InvoiceForm";
 import { ApiError, createInvoice, errorMessage, listSuppliers } from "@/lib/api";
 import type { Supplier } from "@/lib/types";
@@ -53,22 +54,16 @@ export default function NewInvoicePage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <Link href="/invoice-manager" className="text-sm text-[var(--brand)] hover:underline">
-          ← Invoice Manager
-        </Link>
-        <h1 className="mt-1 text-2xl font-semibold text-[var(--brand-deep)]">Type in an invoice</h1>
-        <p className="mt-1 text-sm text-[var(--muted)]">
-          Type every value as printed, including the line totals and the invoice total. The backend checks the
-          maths and you review it before verifying.
-        </p>
-      </div>
+      <PageHeader
+        title="Type in an invoice"
+        description="Type every value as printed, including the line totals and the invoice total. The backend checks the maths and you review it before verifying."
+      />
 
       <div className="bs-card max-w-xl">
         <label className="block">
           <span className="mb-1 block text-sm font-medium">Supplier</span>
           <select className="field" value={supplierId} onChange={(event) => setSupplierId(event.target.value)}>
-            <option value="">{suppliers === null ? "Loading…" : "Choose a supplier"}</option>
+            <option value="">{suppliers === null ? "Loading suppliers…" : "Choose a supplier"}</option>
             {(suppliers ?? []).map((supplier) => (
               <option key={supplier.id} value={supplier.id}>
                 {supplier.name}
